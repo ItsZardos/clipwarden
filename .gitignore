@@ -1,0 +1,33 @@
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# virtualenvs
+.venv/
+venv/
+env/
+
+# pyinstaller output
+build/*
+!build/version_info.txt
+!build/clipboard_monitor.spec
+!build/installer.iss
+dist/
+
+# local config / scratch
+.vscode/
+.idea/
+*.log
+scratch/
+
+# OS junk
+Thumbs.db
+desktop.ini

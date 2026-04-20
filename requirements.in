@@ -1,0 +1,13 @@
+# Regenerate requirements.txt with:
+#   pip-compile --generate-hashes --resolver=backtracking requirements.in
+#
+# Install with:
+#   pip install --require-hashes -r requirements.txt
+
+pywin32
+pystray
+Pillow
+winotify
+base58
+bech32
+PyNaCl

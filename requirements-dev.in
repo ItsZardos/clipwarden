@@ -1,0 +1,10 @@
+# Dev-only deps. Regenerate requirements-dev.txt with:
+#   pip-compile --generate-hashes --resolver=backtracking requirements-dev.in
+
+-c requirements.txt
+
+pytest
+pytest-cov
+ruff
+pyinstaller
+pip-tools
