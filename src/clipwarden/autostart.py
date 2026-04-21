@@ -19,6 +19,7 @@ substitute a dict-backed implementation without patching the stdlib.
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 import winreg
 from pathlib import Path
@@ -36,11 +37,18 @@ def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
-def _quoted(path: Path | str) -> str:
-    s = str(path)
-    if s.startswith('"'):
-        return s
-    return f'"{s}"'
+def _build_command(target: Path | str) -> str:
+    """Build the Run-key command string for ``target`` + ``TRAY_FLAG``.
+
+    ``subprocess.list2cmdline`` implements the CommandLineToArgvW
+    quoting rules, which matches how Explorer parses Run-key values:
+    spaces and embedded double quotes in ``target`` are escaped so
+    the command line always tokenises back to ``[exe, TRAY_FLAG]``.
+    Hand-rolling ``f'"{path}"'`` breaks if the install path ever
+    contains a ``"`` (rare, but produced by some enterprise deploy
+    tools) and the Run entry then silently fails at every login.
+    """
+    return subprocess.list2cmdline([str(target), TRAY_FLAG])
 
 
 def is_enabled() -> bool:
@@ -67,7 +75,7 @@ def enable(exe_path: Path | None = None) -> bool:
         return False
 
     target = exe_path if exe_path is not None else Path(sys.executable)
-    command = f"{_quoted(target)} {TRAY_FLAG}"
+    command = _build_command(target)
 
     try:
         with _reg.CreateKey(_reg.HKEY_CURRENT_USER, RUN_KEY) as key:

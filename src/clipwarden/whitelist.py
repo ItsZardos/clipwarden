@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .classifier import Chain, classify
+from .classifier import classify
 
 log = logging.getLogger(__name__)
 

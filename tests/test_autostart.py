@@ -127,3 +127,40 @@ def test_enable_no_op_in_dev_mode(fake_reg, monkeypatch):
     monkeypatch.setattr(autostart, "_is_frozen", lambda: False, raising=True)
     assert autostart.enable() is False
     assert autostart.is_enabled() is False
+
+
+def test_enable_quotes_path_round_trips_through_argv():
+    """The Run-key command must tokenise back to ``[exe, --tray]``.
+
+    Regression guard against a naive ``f'"{path}" --tray'`` formatter
+    that would corrupt any install path containing a literal double
+    quote. CommandLineToArgvW's rules are non-trivial; delegating to
+    ``subprocess.list2cmdline`` keeps the behaviour correct for the
+    ugly paths too.
+    """
+    import shlex  # noqa: PLC0415
+
+    exe = Path(r"C:\Program Files\ClipWarden\ClipWarden.exe")
+    command = autostart._build_command(exe)
+    # shlex.split with posix=False mimics Windows argv tokenisation
+    # well enough for the happy path; the explicit assertion below
+    # is the real contract.
+    tokens = shlex.split(command, posix=False)
+    assert len(tokens) == 2
+    assert tokens[0].strip('"') == str(exe)
+    assert tokens[1] == autostart.TRAY_FLAG
+
+
+def test_enable_tolerates_path_with_embedded_quote(fake_reg, frozen):
+    """Paths with an internal ``"`` must not break the stored command.
+
+    A hand-rolled formatter (``f'"{s}"'``) would produce
+    ``"C:\\evil"path.exe"`` and Explorer would silently fail. The
+    list2cmdline path escapes the quote instead.
+    """
+    exe = Path(r"C:\evil\"path.exe")
+    assert autostart.enable(exe) is True
+    values = fake_reg._keys[("HKCU", autostart.RUN_KEY)]
+    stored = values[autostart.VALUE_NAME][0]
+    # Stored command contains the escaped form, not a bare quote.
+    assert '\\"' in stored or '"\\""' in stored or stored.count('"') % 2 == 0

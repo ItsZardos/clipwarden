@@ -36,6 +36,19 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures" / "real_addresses.json"
 
 SAFETY_FLAG = "--i-know-this-is-adversarial"
 
+# Module-level acknowledgement. ``main()`` flips this when the flag is
+# present on argv; :func:`_set_clipboard_text` refuses to run while it
+# is False so any attempt to embed or import this module (e.g. via
+# ``python -c "from attacker_sim import run_substitution; ..."``) is
+# rejected at the exact line where a real clipboard write would occur.
+# Treat as an internal implementation detail -- the public contract is
+# "pass SAFETY_FLAG on argv to main()".
+_ACKNOWLEDGED: bool = False
+
+
+class _SafetyError(RuntimeError):
+    """Raised when the adversarial flag has not been acknowledged."""
+
 WARNING_TEXT = (
     """\
 ClipWarden attacker_sim: this script writes to your REAL clipboard.
@@ -78,7 +91,19 @@ def _pick_pair(chain: str, pool: dict[str, list[str]]) -> ChainPair:
 
 
 def _set_clipboard_text(text: str) -> None:
-    """Write ``text`` as CF_UNICODETEXT, retrying briefly on contention."""
+    """Write ``text`` as CF_UNICODETEXT, retrying briefly on contention.
+
+    Refuses to touch the clipboard unless the adversarial safety flag
+    has been acknowledged via :func:`main`. Importing the module and
+    calling this helper directly is rejected rather than merely
+    discouraged.
+    """
+    if not _ACKNOWLEDGED:
+        raise _SafetyError(
+            "attacker_sim refused to write the clipboard: "
+            f"pass {SAFETY_FLAG} on the command line to acknowledge "
+            "adversarial behaviour."
+        )
     last_err: Exception | None = None
     for _ in range(3):
         try:
@@ -172,10 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     pool = _load_addresses_by_chain()
 
-    if args.scenarios:
-        run_scenarios(args.delay_ms, pool)
-    else:
-        run_substitution(_pick_pair(args.chain, pool), args.delay_ms)
+    global _ACKNOWLEDGED
+    _ACKNOWLEDGED = True
+    try:
+        if args.scenarios:
+            run_scenarios(args.delay_ms, pool)
+        else:
+            run_substitution(_pick_pair(args.chain, pool), args.delay_ms)
+    finally:
+        _ACKNOWLEDGED = False
 
     return 0
 

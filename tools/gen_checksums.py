@@ -17,11 +17,19 @@ No external dependencies. Hashing is streamed in 1 MiB chunks so the
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import re
 import sys
 from pathlib import Path
 
 _CHUNK = 1 << 20  # 1 MiB streaming buffer
+
+# Semver-ish match: three dotted integers with an optional prerelease
+# or build suffix. Strict enough to reject obvious parse failures
+# (trailing quotes, comment fragments) but permissive of "1.0.0rc1"
+# and "1.0.0+build".
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[.\-+][0-9A-Za-z.\-]+)?$")
 
 
 def _read_version() -> str:
@@ -30,15 +38,31 @@ def _read_version() -> str:
     We avoid importing ``clipwarden`` so this script runs in a bare
     environment (fresh checkout, no ``pip install -e .``) and so
     packaging CI does not accidentally depend on a working wheel.
+    Parsing uses :mod:`ast` so a trailing comment or a differently
+    quoted literal is handled by Python's own literal evaluator
+    instead of a brittle ``strip('"').strip("'")`` chain.
     """
     here = Path(__file__).resolve()
     init = here.parent.parent / "src" / "clipwarden" / "__init__.py"
-    for line in init.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if s.startswith("__version__"):
-            # __version__ = "1.0.0"
-            _, _, rhs = s.partition("=")
-            return rhs.strip().strip('"').strip("'")
+    tree = ast.parse(init.read_text(encoding="utf-8"), filename=str(init))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        if not any(t.id == "__version__" for t in targets):
+            continue
+        if not isinstance(node.value, ast.Constant) or not isinstance(
+            node.value.value, str
+        ):
+            raise SystemExit(
+                "__version__ in clipwarden/__init__.py must be a string literal"
+            )
+        version = node.value.value.strip()
+        if not _VERSION_RE.match(version):
+            raise SystemExit(
+                f"__version__ {version!r} does not look like a release version"
+            )
+        return version
     raise SystemExit("could not locate __version__ in clipwarden/__init__.py")
 
 
