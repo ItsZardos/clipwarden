@@ -96,18 +96,21 @@ def _build(
         return w
 
     rec = notifier if notifier is not None else _RecordingNotifier()
-    from clipwarden.detector import Detector
-    from clipwarden.logger import get_logger
-    from clipwarden.whitelist import Whitelist
+    from clipwarden.classifier import Chain  # noqa: PLC0415
+    from clipwarden.detector import Detector  # noqa: PLC0415
+    from clipwarden.logger import get_logger  # noqa: PLC0415
+    from clipwarden.whitelist import Whitelist  # noqa: PLC0415
 
     cfg = cfg or Config()
     wl = Whitelist()
+    enabled = frozenset(Chain(c) for c in cfg.enabled_chains if c in Chain.__members__)
     rt = Runtime(
         cfg=cfg,
         rt_paths=rt_paths,
         detector=Detector(
             substitution_window_ms=cfg.substitution_window_ms,
             is_whitelisted=wl.contains,
+            enabled_chains=enabled,
         ),
         notifier=rec,
         logger=get_logger(rt_paths.log),
@@ -258,3 +261,52 @@ def test_build_runtime_from_disk_works_end_to_end(tmp_appdata, frozen_last_input
         rt.stop()
     assert len(rec.substitutions) == 1
     assert Path(os.environ["CLIPWARDEN_APPDATA"]).joinpath("log.jsonl").exists()
+
+
+def test_disabled_chain_produces_no_alert_end_to_end(tmp_appdata, frozen_last_input):
+    # Finding 1: a user-disabled chain must not alert at any layer of
+    # the pipeline, not the logger, not the notifier, not the
+    # dispatcher. Pin this end-to-end so a future refactor that
+    # moves the gate out of the classifier still holds the invariant.
+    cfg = Config(enabled_chains=("ETH",))  # BTC intentionally off
+    rt, watcher, rec, log_path = _build(tmp_appdata, cfg=cfg)
+    rt.start()
+    try:
+        watcher.emit(ClipboardEvent(text=BTC_A, ts_ms=1000, seq=1))
+        watcher.emit(ClipboardEvent(text=BTC_B, ts_ms=1200, seq=2))
+    finally:
+        _cleanup(rt)
+
+    assert rec.substitutions == []
+    assert _read_log_lines(log_path) == []
+
+
+def test_build_runtime_honors_enabled_chains(tmp_appdata, frozen_last_input, monkeypatch):
+    # The factory path (the one the real app uses) must thread
+    # enabled_chains from disk through to the detector. If someone
+    # adds a code path that forgets the plumbing, this test catches
+    # it even if the in-test `_build` helper keeps working.
+    import json  # noqa: PLC0415
+
+    captured: dict = {}
+
+    def factory(on_event):
+        w = _FakeWatcher(on_event)
+        captured["watcher"] = w
+        return w
+
+    monkeypatch.setattr(rt_module, "Watcher", factory, raising=True)
+    cfg_path = tmp_appdata / "config.json"
+    cfg_path.write_text(json.dumps({"enabled_chains": ["ETH"]}), encoding="utf-8")
+
+    rec = _RecordingNotifier()
+    rt = rt_module.build_runtime(notifier=rec)
+    rt.start()
+    try:
+        watcher = captured["watcher"]
+        watcher.emit(ClipboardEvent(text=BTC_A, ts_ms=1000, seq=1))
+        watcher.emit(ClipboardEvent(text=BTC_B, ts_ms=1200, seq=2))
+    finally:
+        rt.stop()
+
+    assert rec.substitutions == []

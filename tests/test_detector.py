@@ -235,3 +235,31 @@ def test_empty_inputs_ignored() -> None:
     # The first valid classified copy still establishes baseline only;
     # nothing to compare against yet, so no alert.
     assert det.observe(BTC_BECH32_A, 100, 0) is None
+
+
+class TestEnabledChainsGate:
+    """Finding 1: a user-disabled chain must not alert at the detector layer."""
+
+    def test_disabled_chain_cannot_baseline(self) -> None:
+        from clipwarden.classifier import Chain  # noqa: PLC0415
+
+        # BTC off means the first BTC copy never becomes a baseline,
+        # so a subsequent BTC copy cannot form a substitution pair.
+        det = Detector(1000, enabled_chains=frozenset({Chain.ETH}))
+        assert det.observe(BTC_BECH32_A, 0, 0) is None
+        assert det.observe(BTC_BECH32_B, 500, 0) is None
+
+    def test_enabled_chain_still_fires_when_others_disabled(self) -> None:
+        from clipwarden.classifier import Chain  # noqa: PLC0415
+
+        det = Detector(1000, enabled_chains=frozenset({Chain.BTC}))
+        assert det.observe(BTC_BECH32_A, 0, 0) is None
+        ev = det.observe(BTC_BECH32_B, 500, 0)
+        assert isinstance(ev, DetectionEvent)
+        assert ev.chain == "BTC"
+
+    def test_none_enables_all_chains(self) -> None:
+        det = Detector(1000, enabled_chains=None)
+        assert det.observe(BTC_BECH32_A, 0, 0) is None
+        ev = det.observe(BTC_BECH32_B, 500, 0)
+        assert isinstance(ev, DetectionEvent)

@@ -44,7 +44,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .classifier import ClassifiedAddress, classify
+from .classifier import Chain, ClassifiedAddress, classify
 
 WhitelistCheck = Callable[[str, str], bool]
 
@@ -76,11 +76,16 @@ class Detector:
         self,
         substitution_window_ms: int,
         is_whitelisted: WhitelistCheck = _never_whitelisted,
+        enabled_chains: frozenset[Chain] | None = None,
     ) -> None:
         if substitution_window_ms <= 0:
             raise ValueError("substitution_window_ms must be positive")
         self._window_ms = substitution_window_ms
         self._is_whitelisted = is_whitelisted
+        # None means "all chains"; Runtime passes a concrete frozenset
+        # derived from cfg.enabled_chains so a user-disabled chain is
+        # never classified and therefore never alerts.
+        self._enabled_chains = enabled_chains
         self._last_addr: ClassifiedAddress | None = None
         self._last_ts_ms: int | None = None
 
@@ -111,7 +116,7 @@ class Detector:
         Parameters are absolute millisecond timestamps in a shared
         monotonic frame. See module docstring for the contract.
         """
-        classified = classify(text)
+        classified = classify(text, self._enabled_chains)
         if classified is None:
             # Non-address text preserves the "last address" memory so a
             # laundered substitution (A -> junk -> B) still alerts.

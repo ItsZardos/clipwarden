@@ -46,21 +46,36 @@ class ClassifiedAddress:
     address: str
 
 
-def classify(candidate: str | None) -> ClassifiedAddress | None:
+def classify(
+    candidate: str | None,
+    enabled_chains: frozenset[Chain] | None = None,
+) -> ClassifiedAddress | None:
+    """Classify ``candidate`` against the enabled chains.
+
+    ``enabled_chains=None`` means "all chains" and is the default
+    used by the test corpus. Production callers (see
+    :class:`clipwarden.detector.Detector`) pass the user-configured
+    set so a chain the user has disabled never produces a detection.
+    A disabled chain is skipped before its validator runs, so the
+    per-sample cost of disabling chains is strictly a win.
+    """
     if not isinstance(candidate, str):
         return None
     s = candidate.strip()
     if not s:
         return None
 
-    if BTC_BECH32_PATTERN.fullmatch(s) and is_valid_btc_bech32_address(s):
+    def allowed(chain: Chain) -> bool:
+        return enabled_chains is None or chain in enabled_chains
+
+    if allowed(Chain.BTC) and BTC_BECH32_PATTERN.fullmatch(s) and is_valid_btc_bech32_address(s):
         return ClassifiedAddress(Chain.BTC, s)
-    if BTC_BASE58_PATTERN.fullmatch(s) and is_valid_btc_base58_address(s):
+    if allowed(Chain.BTC) and BTC_BASE58_PATTERN.fullmatch(s) and is_valid_btc_base58_address(s):
         return ClassifiedAddress(Chain.BTC, s)
-    if ETH_PATTERN.fullmatch(s) and is_valid_eth_address(s):
+    if allowed(Chain.ETH) and ETH_PATTERN.fullmatch(s) and is_valid_eth_address(s):
         return ClassifiedAddress(Chain.ETH, s)
-    if XMR_PATTERN.fullmatch(s) and is_valid_xmr_address(s):
+    if allowed(Chain.XMR) and XMR_PATTERN.fullmatch(s) and is_valid_xmr_address(s):
         return ClassifiedAddress(Chain.XMR, s)
-    if SOL_PATTERN.fullmatch(s) and is_valid_sol_address(s):
+    if allowed(Chain.SOL) and SOL_PATTERN.fullmatch(s) and is_valid_sol_address(s):
         return ClassifiedAddress(Chain.SOL, s)
     return None

@@ -36,6 +36,7 @@ from . import config as _config
 from . import logger as _logger
 from . import paths as _paths
 from . import whitelist as _whitelist
+from .classifier import Chain
 from .config import Config
 from .detector import Detector
 from .notifier import Notifier, NotifierProtocol
@@ -196,9 +197,17 @@ def build_runtime(
     cfg = cfg if cfg is not None else _config.load(rt_paths.config)
 
     wl = _whitelist.Whitelist.load(rt_paths.whitelist)
+    # Translate the config's string chain list into the Chain enum set
+    # the classifier understands. Unknown strings fall through because
+    # config validation already rejects them, but we filter defensively
+    # so an unreviewed cfg path never silently enables a new chain.
+    enabled_chains: frozenset[Chain] = frozenset(
+        Chain(c) for c in cfg.enabled_chains if c in Chain.__members__
+    )
     detector = Detector(
         substitution_window_ms=cfg.substitution_window_ms,
         is_whitelisted=wl.contains,
+        enabled_chains=enabled_chains,
     )
     detection_logger = _logger.get_logger(rt_paths.log)
     notifier = notifier or Notifier(enabled=cfg.notifications_enabled)
