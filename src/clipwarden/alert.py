@@ -479,16 +479,44 @@ class _TkPopup:
             wraplength=width - 40,
         ).pack(anchor="w", pady=(0, 8))
 
-        info = (
-            f"Chain: {chain}\n"
-            f"Original:    {redact(before)}\n"
-            f"Substituted: {redact(after)}\n"
-            f"Elapsed: {elapsed_ms} ms"
-        )
         ttk.Label(
             frame,
-            text=info,
+            text=f"Chain: {chain}",
+            font=("Segoe UI", 10),
+            justify="left",
+            wraplength=width - 40,
+        ).pack(anchor="w")
+
+        original_row = ttk.Frame(frame)
+        original_row.pack(anchor="w")
+        ttk.Label(
+            original_row,
+            text="Original:    ",
+            font=("Segoe UI", 10),
+        ).pack(side="left")
+        ttk.Label(
+            original_row,
+            text=redact(before),
             font=("Consolas", 10),
+        ).pack(side="left")
+
+        substituted_row = ttk.Frame(frame)
+        substituted_row.pack(anchor="w")
+        ttk.Label(
+            substituted_row,
+            text="Substituted: ",
+            font=("Segoe UI", 10),
+        ).pack(side="left")
+        ttk.Label(
+            substituted_row,
+            text=redact(after),
+            font=("Consolas", 10),
+        ).pack(side="left")
+
+        ttk.Label(
+            frame,
+            text=f"Elapsed: {elapsed_ms} ms",
+            font=("Segoe UI", 10),
             justify="left",
             wraplength=width - 40,
         ).pack(anchor="w", pady=(0, 10))
