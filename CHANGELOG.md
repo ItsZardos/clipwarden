@@ -26,3 +26,26 @@ loosely. Dates are ISO.
   hex/base64, and adversarial checksum-mutated addresses).
 - `tools/gen_fixtures.py`: seeded generator for the synthetic half of
   the FP corpus.
+- User-data paths resolver (`paths.py`) for `%APPDATA%\ClipWarden\`
+  with a `CLIPWARDEN_APPDATA` env override for tests.
+- Config module (`config.py`): frozen dataclass, strict JSON schema
+  validation, atomic writes, and back-up-then-default recovery for
+  corrupt files so a silently-disabled monitor can't happen.
+- Exact-address whitelist (`whitelist.py`). ETH and BTC bech32 are
+  normalised to lowercase for lookup; base58 BTC, SOL, and XMR are
+  case-sensitive.
+- Substitution-time detector (`detector.py`): pure state machine,
+  emits `DetectionEvent`, caller handles IO. Configurable window,
+  `GetLastInputInfo`-style user-input suppression, cross-chain
+  transitions never fire, non-address clipboard content preserves
+  prior state (so laundered A -> junk -> B still alerts).
+- Detection logger (`logger.py`): stdlib `RotatingFileHandler` wrapper
+  (10 MB x 3 backups) emitting a stable JSONL schema.
+  `kind="whitelisted_skip"` lines are recorded for debugging when a
+  detection targets a whitelisted address.
+- `tools/dev_feed.py`: YAML replay harness to run hand-written
+  clipboard scenarios through the classifier+detector. Ships with
+  three scenario fixtures covering the three main outcomes.
+- Hypothesis property tests for the detector covering first-event,
+  cross-chain, user-input-suppression, idempotency, monotonicity, and
+  no-state-leak invariants.

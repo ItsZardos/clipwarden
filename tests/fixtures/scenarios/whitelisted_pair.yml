@@ -1,0 +1,15 @@
+scenario: clipper pattern but target is whitelisted
+window_ms: 1000
+
+# Same BTC-to-BTC swap as btc_substitution.yml, but the user has
+# explicitly whitelisted the replacement address. The detector still
+# emits an event - the subscriber sees whitelisted=true and logs it
+# as a skip instead of surfacing a toast.
+whitelist:
+  - {chain: BTC, address: "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"}
+
+events:
+  - {ts: 0,   input_ts: 0, text: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"}
+  - {ts: 500, input_ts: 0, text: "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"}
+
+expect: whitelisted_skip

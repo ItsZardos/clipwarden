@@ -1,0 +1,11 @@
+scenario: basic btc substitution within window
+window_ms: 1000
+
+# User copies a known-good BTC address; 500 ms later the clipboard
+# flips to a different valid BTC address with no user input between.
+# Classic clipper pattern. The detector should fire.
+events:
+  - {ts: 0,   input_ts: 0, text: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"}
+  - {ts: 500, input_ts: 0, text: "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"}
+
+expect: detection

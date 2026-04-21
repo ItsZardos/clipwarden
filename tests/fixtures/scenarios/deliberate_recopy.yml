@@ -1,0 +1,10 @@
+scenario: user typed between copies - deliberate recopy, no alert
+window_ms: 1000
+
+# Same shape as the clipper scenario, but there is keyboard/mouse input
+# after the first copy. Treated as a legitimate re-copy by the user.
+events:
+  - {ts: 0,   input_ts: 0,   text: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"}
+  - {ts: 500, input_ts: 200, text: "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"}
+
+expect: no_event
