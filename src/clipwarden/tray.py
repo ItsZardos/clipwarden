@@ -50,6 +50,13 @@ _TRAY_TITLE = "ClipWarden"
 _PAUSE_15M_SECONDS = 15 * 60
 _PAUSE_1H_SECONDS = 60 * 60
 
+# MB_OK | MB_ICONINFORMATION. Hard-coded so the module does not have
+# to import win32con just for two values; pywin32 defines these as
+# 0x0 and 0x40 respectively, same as the Win32 header.
+_MB_OK_INFO = 0x00000040
+
+_ABOUT_TITLE = "About ClipWarden"
+
 # Sentinel stored in ``_paused_until_ms`` when the user chooses
 # "Until I resume". Monotonic milliseconds are always non-negative,
 # so a negative value unambiguously means "paused with no deadline".
@@ -253,6 +260,29 @@ class TrayApp:
         # know the operations term "log folder".
         self._open(self._paths.log.parent)
 
+    def _about_body(self) -> str:
+        # Exact wording locked in the Phase B plan. The first line is
+        # always "ClipWarden <version>" -- the product name is the
+        # brand, the descriptive subtitle sits on line 3.
+        return (
+            f"ClipWarden {self._version}\n"
+            "\n"
+            "Windows clipboard hijacking monitor\n"
+            "Defends against cryptocurrency clipper malware\n"
+            "\n"
+            "Ethan Tharp\n"
+            "https://ethantharp.dev\n"
+            "\n"
+            "Copyright (c) 2026 Ethan Tharp\n"
+            "Released under the MIT License"
+        )
+
+    def _on_about(self, _icon: Any, _item: Any) -> None:
+        try:
+            self._message_box(0, self._about_body(), _ABOUT_TITLE, _MB_OK_INFO)
+        except Exception:  # noqa: BLE001
+            log.warning("About MessageBox failed", exc_info=True)
+
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem(
@@ -278,6 +308,8 @@ class TrayApp:
             pystray.MenuItem("Open Config", self._on_open_config),
             pystray.MenuItem("Open Log Folder", self._on_open_log_folder),
             pystray.MenuItem("Open History Folder", self._on_open_history_folder),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("About ClipWarden", self._on_about),
         )
 
     def run(self) -> None:
