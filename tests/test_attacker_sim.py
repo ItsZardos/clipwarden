@@ -15,9 +15,7 @@ from pathlib import Path
 import pytest
 
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
-_SPEC = importlib.util.spec_from_file_location(
-    "attacker_sim", _TOOLS / "attacker_sim.py"
-)
+_SPEC = importlib.util.spec_from_file_location("attacker_sim", _TOOLS / "attacker_sim.py")
 assert _SPEC is not None
 assert _SPEC.loader is not None
 attacker_sim = importlib.util.module_from_spec(_SPEC)

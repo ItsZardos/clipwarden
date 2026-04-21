@@ -71,9 +71,7 @@ class _DiagnosticRotatingFileHandler(RotatingFileHandler):
 
     def handleError(self, record: logging.LogRecord) -> None:  # type: ignore[override]
         try:
-            _diag_log.exception(
-                "detection log write failed for %s", self.baseFilename
-            )
+            _diag_log.exception("detection log write failed for %s", self.baseFilename)
         except Exception:  # noqa: BLE001
             # Last-resort fall back to the stdlib behavior so the
             # failure is not entirely silent even if the diagnostic

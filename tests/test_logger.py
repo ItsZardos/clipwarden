@@ -145,9 +145,7 @@ def test_rotation_error_goes_to_diagnostic_logger(tmp_path, caplog) -> None:
 
     path = tmp_path / "log.jsonl"
     logger = lg.get_logger(path)
-    handler = next(
-        h for h in logger.handlers if isinstance(h, RotatingFileHandler)
-    )
+    handler = next(h for h in logger.handlers if isinstance(h, RotatingFileHandler))
     with caplog.at_level(logging.ERROR, logger="clipwarden.diagnostic"):
         try:
             try:
@@ -157,6 +155,4 @@ def test_rotation_error_goes_to_diagnostic_logger(tmp_path, caplog) -> None:
         finally:
             lg.close_logger()
 
-    assert any(
-        "detection log write failed" in rec.message for rec in caplog.records
-    )
+    assert any("detection log write failed" in rec.message for rec in caplog.records)

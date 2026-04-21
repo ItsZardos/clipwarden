@@ -290,9 +290,7 @@ def test_build_runtime_raises_on_unknown_chain(tmp_appdata, monkeypatch):
     surfaces the misconfiguration immediately instead of leaving a
     runtime that pretends the chain was enabled.
     """
-    monkeypatch.setattr(
-        rt_module, "Watcher", lambda on_event: _FakeWatcher(on_event), raising=True
-    )
+    monkeypatch.setattr(rt_module, "Watcher", lambda on_event: _FakeWatcher(on_event), raising=True)
     # Config is a frozen dataclass but not self-validating; direct
     # construction bypasses _validate which only runs in load().
     cfg = Config(enabled_chains=("BTC", "DOGE"))

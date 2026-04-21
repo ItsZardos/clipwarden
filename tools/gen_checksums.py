@@ -51,17 +51,11 @@ def _read_version() -> str:
         targets = [t for t in node.targets if isinstance(t, ast.Name)]
         if not any(t.id == "__version__" for t in targets):
             continue
-        if not isinstance(node.value, ast.Constant) or not isinstance(
-            node.value.value, str
-        ):
-            raise SystemExit(
-                "__version__ in clipwarden/__init__.py must be a string literal"
-            )
+        if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
+            raise SystemExit("__version__ in clipwarden/__init__.py must be a string literal")
         version = node.value.value.strip()
         if not _VERSION_RE.match(version):
-            raise SystemExit(
-                f"__version__ {version!r} does not look like a release version"
-            )
+            raise SystemExit(f"__version__ {version!r} does not look like a release version")
         return version
     raise SystemExit("could not locate __version__ in clipwarden/__init__.py")
 

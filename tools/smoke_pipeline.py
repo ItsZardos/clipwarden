@@ -145,10 +145,7 @@ def main() -> int:
         print("\n--- smoke results ---")
         print(f"toasts captured: {len(rec.substitutions)}")
         for ev in rec.substitutions:
-            print(
-                f"  - {ev.chain}: {ev.before[:12]}... -> {ev.after[:12]}... "
-                f"({ev.elapsed_ms} ms)"
-            )
+            print(f"  - {ev.chain}: {ev.before[:12]}... -> {ev.after[:12]}... ({ev.elapsed_ms} ms)")
         if log_path.exists():
             print(f"\nlog.jsonl ({log_path}):")
             for line in log_path.read_text(encoding="utf-8").splitlines():
@@ -162,8 +159,7 @@ def main() -> int:
         expected = len(PAIRS)
         ok = len(rec.substitutions) == expected
         print(
-            f"\n[smoke] {'PASS' if ok else 'FAIL'}: "
-            f"{len(rec.substitutions)}/{expected} detections"
+            f"\n[smoke] {'PASS' if ok else 'FAIL'}: {len(rec.substitutions)}/{expected} detections"
         )
         return 0 if ok else 1
     finally:

@@ -79,9 +79,7 @@ def _validate_pair(chain: str, address: str) -> str:
     canonical = _normalize_chain(chain)
     classified = classify(address)
     if classified is None:
-        raise WhitelistError(
-            f"address does not validate for any supported chain: {address!r}"
-        )
+        raise WhitelistError(f"address does not validate for any supported chain: {address!r}")
     if classified.chain.value != canonical:
         raise WhitelistError(
             f"claimed chain {canonical!r} does not match classifier "

@@ -244,8 +244,7 @@ def _configure_diagnostic_logging(level: str) -> None:
         # is a private identity flag so an unrelated rotating handler
         # ending in the same filename tail cannot confuse the check.
         already_attached = any(
-            getattr(h, "_clipwarden_diagnostic_handler", False)
-            for h in root.handlers
+            getattr(h, "_clipwarden_diagnostic_handler", False) for h in root.handlers
         )
         appdata = _paths.appdata_dir()
         appdata.mkdir(parents=True, exist_ok=True)

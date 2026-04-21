@@ -15,9 +15,7 @@ from pathlib import Path
 import pytest
 
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
-_SPEC = importlib.util.spec_from_file_location(
-    "gen_checksums", _TOOLS / "gen_checksums.py"
-)
+_SPEC = importlib.util.spec_from_file_location("gen_checksums", _TOOLS / "gen_checksums.py")
 assert _SPEC is not None
 assert _SPEC.loader is not None
 gen_checksums = importlib.util.module_from_spec(_SPEC)
@@ -61,8 +59,7 @@ def test_read_version_rejects_non_string_literal(tmp_path, monkeypatch):
     """
     fake_here = _write_init(
         tmp_path,
-        "def get_version() -> str: return '1.0.0'\n"
-        "__version__ = get_version()\n",
+        "def get_version() -> str: return '1.0.0'\n__version__ = get_version()\n",
     )
     monkeypatch.setattr(gen_checksums, "__file__", str(fake_here))
     with pytest.raises(SystemExit, match="must be a string literal"):

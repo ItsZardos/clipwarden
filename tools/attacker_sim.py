@@ -49,6 +49,7 @@ _ACKNOWLEDGED: bool = False
 class _SafetyError(RuntimeError):
     """Raised when the adversarial flag has not been acknowledged."""
 
+
 WARNING_TEXT = (
     """\
 ClipWarden attacker_sim: this script writes to your REAL clipboard.

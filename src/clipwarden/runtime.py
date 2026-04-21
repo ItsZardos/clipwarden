@@ -269,9 +269,7 @@ def build_runtime(
     # so a misconfigured embedding fails at startup, not at runtime.
     unknown = [c for c in cfg.enabled_chains if c not in Chain.__members__]
     if unknown:
-        raise ValueError(
-            f"enabled_chains contains unsupported entries: {sorted(unknown)}"
-        )
+        raise ValueError(f"enabled_chains contains unsupported entries: {sorted(unknown)}")
     enabled_chains: frozenset[Chain] = frozenset(Chain(c) for c in cfg.enabled_chains)
     detector = Detector(
         substitution_window_ms=cfg.substitution_window_ms,

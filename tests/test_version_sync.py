@@ -29,10 +29,7 @@ def _read_init_version() -> str:
     for node in tree.body:
         if (
             isinstance(node, ast.Assign)
-            and any(
-                isinstance(t, ast.Name) and t.id == "__version__"
-                for t in node.targets
-            )
+            and any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets)
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, str)
         ):
@@ -41,19 +38,13 @@ def _read_init_version() -> str:
 
 
 def _read_pyproject_version() -> str:
-    data = tomllib.loads(
-        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     return data["project"]["version"]
 
 
 def _read_version_info_tuple() -> tuple[int, int, int, int]:
-    text = (REPO_ROOT / "build" / "version_info.txt").read_text(
-        encoding="utf-8"
-    )
-    m = re.search(
-        r"filevers=\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", text
-    )
+    text = (REPO_ROOT / "build" / "version_info.txt").read_text(encoding="utf-8")
+    m = re.search(r"filevers=\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", text)
     assert m is not None, "filevers tuple missing from version_info.txt"
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
 
@@ -75,6 +66,5 @@ def test_version_info_tuple_matches_package_version():
     # Fourth component is the build number; we don't require it to be
     # zero but the first three must track the package.
     assert filevers[:3] == core, (
-        f"build/version_info.txt filevers {filevers} does not match "
-        f"__version__ core {core}"
+        f"build/version_info.txt filevers {filevers} does not match __version__ core {core}"
     )

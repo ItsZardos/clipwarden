@@ -168,9 +168,7 @@ def _load_image(name: str) -> Image.Image:
         with Image.open(path) as im:
             image = im.copy()
     except (FileNotFoundError, OSError):
-        log.warning(
-            "tray asset missing: %s; falling back to placeholder icon", path
-        )
+        log.warning("tray asset missing: %s; falling back to placeholder icon", path)
         image = _placeholder_image()
     _image_cache[name] = image
     return image
