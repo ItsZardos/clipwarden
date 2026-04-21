@@ -16,19 +16,22 @@ Modes:
 
 Startup sequence (tray / headless paths):
 
-1. Parse args and configure logging.
-2. Acquire the session-scoped singleton mutex. If another instance
+1. Mark the process per-monitor DPI aware so the tray icon, About
+   MessageBox, and Tk alert popup render crisply on HiDPI displays.
+2. Parse args and configure logging.
+3. Acquire the session-scoped singleton mutex. If another instance
    already holds it, show a native MessageBox and exit 0.
-3. Build the runtime. On failure, show a MessageBox with the
-   exception and the log-file path, then exit 1.
-4. Run the selected mode's blocking loop.
-5. On exit, stop the runtime (idempotent -- tray's Quit handler also
+4. Build the alert dispatcher for the selected mode (tray vs. headless)
+   and build the runtime with it wired in.
+5. Run the selected mode's blocking loop.
+6. On exit, stop the runtime (idempotent -- tray's Quit handler also
    calls stop).
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import logging
 import signal
 import sys
@@ -39,7 +42,14 @@ import win32api
 
 from . import __version__
 from . import autostart as _autostart
+from . import config as _config
 from . import paths as _paths
+from .alert import (
+    TrayFlashChannel,
+    build_dispatcher_for_headless,
+    build_dispatcher_for_tray,
+)
+from .notifier import Notifier
 from .runtime import RuntimePaths, build_runtime
 from .singleton import SINGLETON_MUTEX_NAME
 from .singleton import acquire as acquire_singleton
@@ -53,6 +63,61 @@ _MB_OK_ERROR = 0x00000010
 _SECOND_INSTANCE_TITLE = "ClipWarden"
 _SECOND_INSTANCE_BODY = "ClipWarden is already running. Check your system tray."
 _STARTUP_FAILURE_TITLE = "ClipWarden failed to start"
+
+# SetProcessDpiAwarenessContext sentinel. ``-4`` is
+# DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703+),
+# which is the strongest mode available to desktop apps and the
+# one Windows documentation recommends for new tray apps.
+_DPI_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+# SetProcessDpiAwareness value for PROCESS_PER_MONITOR_DPI_AWARE
+# (Windows 8.1 fallback when the V2 context API is unavailable).
+_PROCESS_PER_MONITOR_DPI_AWARE = 2
+
+
+def _enable_dpi_awareness() -> None:
+    """Mark the process as per-monitor DPI aware before any GUI code runs.
+
+    Without this, the frozen ClipWarden.exe ships as DPI-unaware and
+    Windows applies DPI virtualization on HiDPI displays (125%/150%
+    scaling): the whole app is rendered at 96 DPI and then bitmap-
+    upscaled, which blurs the tray icon on top of any blur introduced
+    by Shell_NotifyIcon's own stretch. Becoming per-monitor aware
+    lets Windows ask the app for larger native HICONs and renders
+    text crisply in the About MessageBox and the Tk alert popup.
+
+    Must be called before any window is created (tray icon, Tk root,
+    win32 MessageBox). Safe to call multiple times; Windows silently
+    ignores subsequent calls once a context is set.
+
+    Tries three APIs in order of preference:
+
+    1. ``user32.SetProcessDpiAwarenessContext(-4)`` - Windows 10 1703+.
+    2. ``shcore.SetProcessDpiAwareness(2)`` - Windows 8.1+.
+    3. ``user32.SetProcessDPIAware()`` - Vista+, system-DPI only.
+
+    Any failure is swallowed: a locked-down host or a future Windows
+    breakage must not prevent startup.
+    """
+    try:
+        user32 = ctypes.windll.user32
+    except (OSError, AttributeError):
+        return
+    try:
+        set_ctx = getattr(user32, "SetProcessDpiAwarenessContext", None)
+        if set_ctx is not None and set_ctx(ctypes.c_void_p(_DPI_CONTEXT_PER_MONITOR_AWARE_V2)):
+            return
+    except OSError:
+        log.debug("SetProcessDpiAwarenessContext raised", exc_info=True)
+    try:
+        shcore = ctypes.windll.shcore
+        if shcore.SetProcessDpiAwareness(_PROCESS_PER_MONITOR_DPI_AWARE) == 0:
+            return
+    except (OSError, AttributeError):
+        log.debug("SetProcessDpiAwareness fallback unavailable", exc_info=True)
+    try:
+        user32.SetProcessDPIAware()
+    except OSError:
+        log.debug("SetProcessDPIAware fallback failed", exc_info=True)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -117,7 +182,20 @@ def _show_startup_failure(err: BaseException) -> None:
 
 
 def _run_headless() -> int:
-    runtime = build_runtime()
+    # Headless mode is "no GUI." The popup channel is a Tk window
+    # and the tray flash channel requires a tray, so neither
+    # applies. Sound and toast remain available through the
+    # headless dispatcher builder.
+    rt_paths = RuntimePaths.resolve()
+    cfg = _config.load(rt_paths.config)
+    notifier = Notifier(enabled=cfg.notifications_enabled)
+    dispatcher = build_dispatcher_for_headless(alert_cfg=cfg.alert, notifier=notifier)
+    runtime = build_runtime(
+        cfg=cfg,
+        rt_paths=rt_paths,
+        notifier=notifier,
+        alert_dispatcher=dispatcher,
+    )
     runtime.start()
     stop_event = threading.Event()
 
@@ -144,13 +222,32 @@ def _run_headless() -> int:
 
 def _run_tray() -> int:
     rt_paths = RuntimePaths.resolve()
-    runtime = build_runtime(rt_paths=rt_paths)
+    cfg = _config.load(rt_paths.config)
+    notifier = Notifier(enabled=cfg.notifications_enabled)
+    # The flash channel is constructed unbound because the TrayApp
+    # does not exist yet. We bind ``tray_app.flash`` into it after
+    # construction so the dispatcher can fire the channel without
+    # needing a handle to the tray directly.
+    flash_channel = TrayFlashChannel()
+    dispatcher = build_dispatcher_for_tray(
+        alert_cfg=cfg.alert,
+        notifier=notifier,
+        tray_flash_channel=flash_channel if cfg.alert.tray_flash else None,
+    )
+    runtime = build_runtime(
+        cfg=cfg,
+        rt_paths=rt_paths,
+        notifier=notifier,
+        alert_dispatcher=dispatcher,
+    )
     tray_app = TrayApp(
         runtime=runtime,
-        notifier=None,
+        notifier=notifier,
         rt_paths=rt_paths,
         version=__version__,
     )
+    if cfg.alert.tray_flash:
+        flash_channel.bind(tray_app.flash)
     runtime.start()
     try:
         tray_app.run()
@@ -180,6 +277,11 @@ def _uninstall_autostart() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Must run before any GUI code (Tk, pystray, win32 MessageBox)
+    # creates its first window; a window inherits its process's DPI
+    # awareness context at creation time and cannot be upgraded
+    # afterwards.
+    _enable_dpi_awareness()
     args = _parse_args(argv)
     logging.basicConfig(
         level=args.log_level,
