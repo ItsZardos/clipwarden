@@ -9,31 +9,13 @@ Static assets shipped with ClipWarden.
 - `icon-alert.ico` - red alert variant shown for ~5 seconds after a
   detection fires, then swapped back to normal or disabled
 
-All three files are generated deterministically by
-[`tools/gen_icons.py`](../tools/gen_icons.py). The design is a
-rounded shield silhouette with a horizontal clipboard-style slot cut
-out near the top; monochrome white for the normal state, muted grey
-for disabled, red for alert. They are intentionally simple enough
-for a designer to replace without reverse-engineering a toolchain.
+All three are multi-resolution `.ico` files (16, 32, 48, 256 px
+frames) so the tray, Alt-Tab switcher, and Settings-style surfaces
+all render crisply. Source masters live outside the repo with the
+rest of the brand artwork.
 
-A future designer should swap all three for a proper mark. When
-they do:
-
-1. Drop the new `icon.ico`, `icon-disabled.ico`, and
-   `icon-alert.ico` in this folder. Keep the multi-resolution
-   layout (16, 32, 48, 256 px) so the tray, Alt-Tab, and
-   Settings-style surfaces all render crisply.
-2. Delete `tools/gen_icons.py` (or point it at the new source SVG
-   if the designer prefers a reproducible pipeline).
-3. Update [`build/ClipWarden.spec`](../build/ClipWarden.spec) and
-   [`build/installer.iss`](../build/installer.iss) if the filenames
-   or paths change.
-
-Regenerate the placeholders at any time with:
-
-```powershell
-python tools/gen_icons.py
-```
-
-The output is byte-stable across runs on the same Pillow release, so
-commits stay clean unless the recipe itself changes.
+To replace the icons, drop new `.ico` files in this folder with the
+same names. Keep the multi-resolution layout so HiDPI tray cells
+have a native frame to pick up. If the filenames or paths change,
+update [`build/ClipWarden.spec`](../build/ClipWarden.spec) and
+[`build/installer.iss`](../build/installer.iss) to match.
