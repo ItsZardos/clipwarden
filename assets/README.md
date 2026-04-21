@@ -6,19 +6,23 @@ Static assets shipped with ClipWarden.
 
 - `icon.ico` - tray icon for the normal (enabled) state
 - `icon-disabled.ico` - tray icon for the paused / disabled state
+- `icon-alert.ico` - red alert variant shown for ~5 seconds after a
+  detection fires, then swapped back to normal or disabled
 
-Both files are **placeholders**, generated deterministically by
+All three files are generated deterministically by
 [`tools/gen_icons.py`](../tools/gen_icons.py). The design is a
 rounded shield silhouette with a horizontal clipboard-style slot cut
 out near the top; monochrome white for the normal state, muted grey
-for disabled.
+for disabled, red for alert. They are intentionally simple enough
+for a designer to replace without reverse-engineering a toolchain.
 
-A future designer should replace both files with a proper mark. When
+A future designer should swap all three for a proper mark. When
 they do:
 
-1. Drop the new `icon.ico` and `icon-disabled.ico` in this folder.
-   Keep the multi-resolution layout (16, 32, 48, 256 px) so the
-   tray, Alt-Tab, and Settings-style surfaces all render crisply.
+1. Drop the new `icon.ico`, `icon-disabled.ico`, and
+   `icon-alert.ico` in this folder. Keep the multi-resolution
+   layout (16, 32, 48, 256 px) so the tray, Alt-Tab, and
+   Settings-style surfaces all render crisply.
 2. Delete `tools/gen_icons.py` (or point it at the new source SVG
    if the designer prefers a reproducible pipeline).
 3. Update [`build/ClipWarden.spec`](../build/ClipWarden.spec) and

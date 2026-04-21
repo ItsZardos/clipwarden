@@ -6,7 +6,64 @@ loosely. Dates are ISO.
 
 ## [Unreleased]
 
-### Added - Phase B (tray UI + packaging)
+### Changed - post-v1.0.0 hardening pass
+- Watcher shutdown now releases the `_stop_handle` Win32 event on a
+  clean stop and reallocates it on the next `start()`, closing a
+  per-cycle handle leak that previously only freed on process exit.
+- Alert dispatcher hardening: `ToastChannel` now runs on a
+  single-slot `ThreadPoolExecutor` so a slow toast subsystem
+  cannot stall the popup, sound, tray-flash, or log channels;
+  `PopupChannel` caps concurrent topmost windows so rapid
+  same-pair detections can no longer stack Tk instances; the
+  dispatcher logs channel-fired breadcrumbs only on success and
+  lets `BaseException` (`KeyboardInterrupt`, `SystemExit`)
+  propagate instead of swallowing it.
+- `Config.load()` and `Whitelist.load()` now re-persist their
+  default files immediately after a corrupt-file backup so the
+  primary path is always present on disk, matching what a fresh
+  install produces. `Whitelist.add()` rejects chain/address
+  mismatches at the classifier layer, and `Whitelist.load()`
+  drops mismatched entries with a warning instead of storing
+  rows that can never match a real detection.
+- Classifier strips zero-width and bidi control characters from
+  candidate strings before regex matching, so a lookalike address
+  with an embedded ZWSP no longer bypasses classification.
+- `build_runtime()` fails loudly on unknown `enabled_chains` tokens
+  instead of silently filtering them, and `CLIPWARDEN_DEMO_MODE`
+  is now ignored in frozen PyInstaller builds with a diagnostic
+  warning so a demo-mode override cannot ride into a release.
+- Detection logger: case-insensitive path matching in the handler
+  lookup (Windows path-casing), buffered records are flushed
+  before handlers are removed or closed, and handler-level
+  failures route through a dedicated `clipwarden.diagnostic`
+  logger so rotation or disk errors surface even in `--noconsole`
+  builds where stderr is swallowed.
+- Tray asset loading caches decoded images and falls back to a
+  16x16 placeholder icon if an `.ico` is missing or unreadable;
+  the pystray event loop is now wrapped so a backend failure
+  (missing notification area, broken Explorer) logs and returns
+  cleanly rather than crashing the process; and a racing
+  flash-timer wakeup after Quit is a no-op instead of mutating
+  torn-down icon state.
+- Tools: `tools/attacker_sim.py` enforces its adversarial flag at
+  the clipboard-write boundary (import-and-call bypass is
+  rejected); `tools/smoke_pipeline.py` snapshots and restores
+  `CLIPWARDEN_APPDATA` / `CLIPWARDEN_DEMO_MODE`; `autostart.py`
+  uses `subprocess.list2cmdline` to build the Run-key command so
+  install paths with embedded quote characters still round-trip
+  through CommandLineToArgvW; `tools/gen_checksums.py` parses
+  `__version__` with `ast` and validates the result against a
+  semver-ish regex so release CI fails loudly on a dynamic or
+  malformed version literal.
+- Cross-file version sync is now tested in CI: the new
+  `tests/test_version_sync.py` checks
+  `src/clipwarden/__init__.py`, `pyproject.toml`, and
+  `build/version_info.txt` agree on the marketing version so a
+  partial release bump cannot produce a signed installer with
+  drifted metadata.
+- Tests: 371 total (up from 328).
+
+### Added - tray UI and packaging
 - System-tray app (`tray.py`) built on `pystray` with `Enable`,
   three-option `Pause` submenu (15 min / 1 hour / Until I resume)
   with auto-resume timer, `Open Config` / `Open Log Folder` /
@@ -83,9 +140,9 @@ loosely. Dates are ISO.
   `pyproject.toml`, and `build/version_info.txt`. PyPI
   `Development Status` classifier moved from `3 - Alpha` to
   `4 - Beta`.
-- Default run mode is now the tray; the Phase A headless
-  behaviour is still reachable via `--headless` and is the mode
-  used by CI and the smoke-pipeline harness.
+- Default run mode is now the tray; the headless behaviour is
+  still reachable via `--headless` and is the mode used by CI and
+  the smoke-pipeline harness.
 - `Config.enabled_chains` is now honoured at runtime: disabled
   chains are short-circuited in the classifier dispatch instead
   of only in the UI, so a disabled chain produces zero detector
@@ -113,7 +170,7 @@ loosely. Dates are ISO.
   Any legacy `"autostart"` field in an existing `config.json`
   is stripped on load and the file is rewritten without it.
 
-### Added - Phase A (runtime foundation)
+### Added - runtime foundation
 - Project scaffolding: package layout, LICENSE, pinned + hashed
   dependencies, ruff + pytest configs, CI on windows-latest.
 - Address classifier with strongest-checksum-first dispatch (BTC ->

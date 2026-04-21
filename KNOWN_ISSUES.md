@@ -1,12 +1,8 @@
 # Known Issues
 
-Tracked issues carried forward to v1.0.1. Each entry has a severity
-(none of these are blockers for v1.0.0 or they would have been
-fixed), a concrete reproduction, and a sketch of the intended fix.
-Everything here was surfaced by an external review during the v1.0.0
-hardening pass and deliberately deferred because it either a) is a
-papercut rather than a defect, or b) needs a larger refactor than
-v1.0.0 can absorb without re-opening the test matrix.
+Issues tracked for future releases. Each entry has a severity (none
+of these are release blockers or they would have been fixed), a
+concrete reproduction, and a sketch of the intended fix.
 
 File nothing here without a repro. If you hit one of these in the
 wild, please attach your `%APPDATA%\ClipWarden\diagnostic.log`
@@ -31,106 +27,60 @@ enforced.
 pause-toggle + detection-fire cycles occasionally shows a redundant
 icon swap that settles within the next event.
 
-**Fix sketch for v1.0.1**: funnel every `TrayApp` state change
-through a single `queue.Queue` drained by the tray thread. The
-flash timer and the About dialog thread enqueue requests instead
-of calling mutating methods directly. Preserves the "pystray owns
-the main thread" contract and makes the threading invariants
-checkable in tests.
+**Fix sketch**: funnel every `TrayApp` state change through a single
+`queue.Queue` drained by the tray thread. The flash timer and the
+About dialog thread enqueue requests instead of calling mutating
+methods directly. Preserves the "pystray owns the main thread"
+contract and makes the threading invariants checkable in tests.
 
-## 2. Toast delivery is synchronous
-
-**Severity**: low; affects perceived alert latency on flaky shells.
-
-`ToastChannel.fire` calls `winotify.Notification(...).show()` on
-the dispatcher's calling thread. When the Windows notification
-subsystem is slow (Explorer restart pending, corrupt action-centre
-cache) the call can block for hundreds of milliseconds. The
-dispatcher dispatches to channels sequentially by design so a slow
-toast pushes back on the popup / sound / tray-flash channels.
-
-**Repro**: restart Explorer, copy two valid same-chain addresses
-within 1 s. Observe that the popup, sound, and tray flash can
-appear up to ~500 ms after the log line is written.
-
-**Fix sketch for v1.0.1**: run `ToastChannel` on a single-slot
-`ThreadPoolExecutor(max_workers=1)` so the dispatcher never blocks
-on it. Drop toast requests if the executor is saturated rather
-than queueing; toast is the passive channel, so dropping is the
-correct failure mode.
-
-## 3. Whitelist chain validation
-
-**Severity**: low; user can corrupt their own whitelist but the
-corruption does not silently disable detection.
-
-`Whitelist.load()` validates that `whitelist.json` has the right
-JSON shape (object root, `entries` is a list of objects with
-`chain`/`address` keys) but it does not verify that each `address`
-is actually a valid address on the claimed `chain`. A hand-edited
-whitelist entry with a mismatched pair (ETH address labelled
-as BTC, for example) will be stored and looked up literally, and
-will not match any real detection event.
-
-**Repro**: edit `whitelist.json` to add `{"chain": "BTC",
-"address": "0x0000000000000000000000000000000000000000"}`. Save.
-The tool accepts the entry. A subsequent ETH detection against
-that address is not whitelisted, because the pair is keyed by
-chain.
-
-**Fix sketch for v1.0.1**: run each entry through
-`classifier.classify(address)` at load time. Mismatches fall
-through to the existing `_backup_corrupt` path (rename to
-`whitelist.json.bak-<ts>`, reinstate empty). That re-uses the
-Commit 13 backup pattern and surfaces the problem loudly instead
-of silently storing a useless row.
-
-## 4. `_stop_handle` leak on stop-timeout
+## 2. `_stop_handle` leak on stranded pump thread
 
 **Severity**: low; one-time leak per hung shutdown, not per
 operation.
 
-`Watcher.stop()` posts `WM_QUIT` via `PostMessage` and joins the
-pump + worker threads with a timeout. Commit 11 added the right
-behaviour for stranded threads (mark `_stopping` and refuse
-subsequent `start()` calls on the same instance). But the
-`_stop_handle` object and the underlying message-only window's
-HWND are not freed in the stranded case: the pump thread still
-owns them and we have no safe way to reclaim them without
-entering the thread's message pump. The memory is reclaimed when
-the process exits.
+`Watcher.stop()` posts `WM_QUIT`, signals `_stop_handle`, and joins
+the pump + worker threads with a timeout. A clean stop releases the
+event handle. If the pump thread is stranded (external message pump
+wedge, runaway Win32 callback) the instance is marked `_stopping`
+and refuses subsequent `start()` calls, but `_stop_handle` and the
+message-only window's HWND stay alive: the pump thread still owns
+them and we have no safe way to reclaim them without entering the
+thread's message pump. The memory is reclaimed when the process
+exits.
 
-**Repro**: subclass the test `_FakeWin32` from `test_watcher.py`
-to never PumpMessages after `PostMessage`, call `start()` then
+**Repro**: subclass the test `_FakeWin32` from `test_watcher.py` to
+never PumpMessages after `PostThreadMessage`, call `start()` then
 `stop()`. Inspect `watcher._stop_handle` post-stop; it is still
-set.
+set while the pump thread is alive.
 
-**Fix sketch for v1.0.1**: give the pump thread a
+**Fix sketch**: give the pump thread a
 `threading.Event` it checks inside its message loop every 500 ms.
 On `stop()`, set the event as well as posting WM_QUIT; on event
 receipt the pump thread tears down its own window and exits. A
-non-responsive pump thread (the whole reason we have the
-timeout) still cannot be force-collected, but any hang that
-resolves within a handful of seconds now returns the resources.
+non-responsive pump thread still cannot be force-collected, but
+any hang that resolves within a handful of seconds then returns
+the resources instead of leaking them until process exit.
 
-## 5. Tray asset resolution fragility
+## 3. Tray assets not packaged in the wheel
 
 **Severity**: low; affects a specific dev layout, not shipped
 installs.
 
-`tray._resolve_asset` probes `sys._MEIPASS`, then the
-repo-adjacent `assets/` folder (via `Path(__file__)`). In a fresh
-`pip install -e .` checkout with the sdist layout (no `assets/`
+`tray._resolve_asset` probes `sys._MEIPASS`, then the repo-adjacent
+`assets/` folder (via `Path(__file__)`). In a non-editable
+`pip install .` checkout with the sdist layout (no `assets/`
 alongside `src/clipwarden/`), the fallback path resolves to a
-directory that does not exist and the tray falls back to a
-1x1 placeholder icon. The frozen exe is unaffected because
-`_MEIPASS` is always set; only the "run from source" path hits
-this.
+directory that does not exist. The tray now substitutes a 16x16
+neutral-grey placeholder icon and logs a warning instead of
+crashing, so the app still launches, but the icon is a visual
+breadcrumb rather than a polished mark. The frozen exe is
+unaffected because `_MEIPASS` is always set; only the
+"pip-install, run from the installed wheel" path hits this.
 
 **Repro**: `pip install .` into a fresh venv (not editable),
-`python -m clipwarden`. The tray appears with the placeholder.
+`python -m clipwarden`. The tray appears with the grey placeholder.
 
-**Fix sketch for v1.0.1**: package the icons under
+**Fix sketch**: package the icons under
 `src/clipwarden/assets/` so `Path(__file__).parent / "assets"`
 resolves inside the installed wheel, and update `pyproject.toml`
 package-data to include `*.ico`. Keep the top-level `assets/`
