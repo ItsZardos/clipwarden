@@ -33,6 +33,22 @@ are caught by the outer ``main`` wrapper and written to
 failure. ``build/launcher.py`` duplicates the fallback in stdlib-only
 form so import-time failures (which happen before this module's
 handler can run) still land in the same file.
+
+Disk layout (all user-writable data is under ``%APPDATA%\\ClipWarden``,
+i.e. the Roaming profile; the installer puts the binary under
+``%LOCALAPPDATA%\\Programs\\ClipWarden`` but ClipWarden never writes
+there at runtime):
+
+* ``config.json``      -- user settings (see :mod:`clipwarden.config`)
+* ``whitelist.json``   -- user-whitelisted address pairs
+* ``log.jsonl``        -- append-only detection audit trail
+* ``diagnostic.log``   -- optional rotating runtime log when
+                          ``CLIPWARDEN_DIAGNOSTIC=1`` (or ``true`` / ``yes`` /
+                          ``on``); captures startup and alert-channel traces
+                          for debugging a silent ``--noconsole`` build.
+* ``crash.log``        -- unhandled-exception tracebacks captured by
+                          :func:`_write_crash_log` and by the launcher
+                          shim.
 """
 
 from __future__ import annotations
@@ -42,6 +58,8 @@ import contextlib
 import ctypes
 import datetime
 import logging
+import logging.handlers
+import os
 import signal
 import sys
 import threading
@@ -76,6 +94,9 @@ _SECOND_INSTANCE_BODY = "ClipWarden is already running. Check your system tray."
 _STARTUP_FAILURE_TITLE = "ClipWarden failed to start"
 
 _CRASH_LOG_NAME = "crash.log"
+_DIAGNOSTIC_LOG_NAME = "diagnostic.log"
+_DIAGNOSTIC_MAX_BYTES = 256 * 1024
+_DIAGNOSTIC_BACKUP_COUNT = 3
 
 # SetProcessDpiAwarenessContext sentinel. ``-4`` is
 # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703+),
@@ -186,6 +207,69 @@ def _write_crash_log(
         # is acceptable because the next-best signal (stderr) is not
         # available in the --noconsole packaged build anyway.
         return None
+
+
+def _diagnostic_env_enabled() -> bool:
+    """Return whether the user opted in via ``CLIPWARDEN_DIAGNOSTIC``."""
+    v = os.environ.get("CLIPWARDEN_DIAGNOSTIC", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _configure_diagnostic_logging(level: str) -> None:
+    """Attach a rotating file handler to the root logger.
+
+    Gated by :func:`_diagnostic_env_enabled`. When enabled, a
+    ``--noconsole`` PyInstaller build can surface
+    ``log.warning`` / ``log.exception`` (for example inside
+    :class:`~clipwarden.alert.PopupChannel`) to ``diagnostic.log``.
+
+    Limits are deliberately small
+    (256 KiB * 3 backups = ~1 MiB cap) so a long-running tray doesn't
+    accumulate unbounded state; anything more than a few KiB of log
+    traffic in a well-behaved build would itself be a bug worth
+    investigating.
+
+    Best-effort: a failure to open the log file (read-only profile,
+    corrupt appdata, antivirus lock) must not prevent startup. The
+    console handler installed by :func:`logging.basicConfig` still
+    provides the legacy stderr stream, and a diagnostic-logging
+    failure is logged through that channel as a warning.
+    """
+    try:
+        root = logging.getLogger()
+        # Idempotency check runs BEFORE we construct a new handler,
+        # because the RotatingFileHandler constructor opens the file
+        # immediately. A discarded-after-creation handler would leak
+        # a file descriptor on every repeat call.
+        already_attached = any(
+            isinstance(h, logging.handlers.RotatingFileHandler)
+            and getattr(h, "baseFilename", "").endswith(_DIAGNOSTIC_LOG_NAME)
+            for h in root.handlers
+        )
+        appdata = _paths.appdata_dir()
+        appdata.mkdir(parents=True, exist_ok=True)
+        if not already_attached:
+            handler = logging.handlers.RotatingFileHandler(
+                appdata / _DIAGNOSTIC_LOG_NAME,
+                maxBytes=_DIAGNOSTIC_MAX_BYTES,
+                backupCount=_DIAGNOSTIC_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            handler.setLevel(level)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+                )
+            )
+            root.addHandler(handler)
+        # Root level must be at-or-below the handler level; a
+        # default-WARNING root would hide the INFO records the
+        # handler wants to write.
+        desired = logging.getLevelName(level)
+        if isinstance(desired, int):
+            root.setLevel(min(desired, root.level or logging.WARNING))
+    except Exception:  # noqa: BLE001
+        log.warning("diagnostic log handler setup failed", exc_info=True)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -361,6 +445,11 @@ def _main_inner(argv: list[str] | None) -> int:
         level=args.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Optional file trace: set CLIPWARDEN_DIAGNOSTIC=1 to mirror INFO+
+    # to %APPDATA%\ClipWarden\diagnostic.log (tray/headless only).
+    _fast_exit = args.version or args.install_autostart or args.uninstall_autostart
+    if not _fast_exit and _diagnostic_env_enabled():
+        _configure_diagnostic_logging(args.log_level)
 
     if args.version:
         print(f"ClipWarden {__version__}", flush=True)
