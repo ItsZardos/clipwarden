@@ -27,9 +27,11 @@ Design choices:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,14 @@ log = logging.getLogger(__name__)
 _ICON_NORMAL = "icon.ico"
 _ICON_DISABLED = "icon-disabled.ico"
 _TRAY_TITLE = "ClipWarden"
+
+_PAUSE_15M_SECONDS = 15 * 60
+_PAUSE_1H_SECONDS = 60 * 60
+
+# Sentinel stored in ``_paused_until_ms`` when the user chooses
+# "Until I resume". Monotonic milliseconds are always non-negative,
+# so a negative value unambiguously means "paused with no deadline".
+PAUSE_INDEFINITE: int = -1
 
 
 def _resolve_asset(name: str) -> Path:
@@ -138,10 +148,78 @@ class TrayApp:
             self._refresh_icon()
 
     def _on_toggle_enabled(self, _icon: Any, _item: Any) -> None:
+        # Manual toggle always wins: if a pause is in flight we cancel
+        # its timer and clear the deadline before touching runtime
+        # state so the menu doesn't briefly show both "Resume now"
+        # active and "Enable" checked.
+        self._clear_pause(cancel_timer=True)
         if self._enabled:
             self._disable()
         else:
             self._enable()
+
+    @property
+    def _is_paused(self) -> bool:
+        return self._paused_until_ms is not None
+
+    def _clear_pause(self, *, cancel_timer: bool) -> None:
+        if cancel_timer and self._pause_timer is not None:
+            try:
+                self._pause_timer.cancel()
+            except Exception:  # noqa: BLE001
+                log.debug("pause timer cancel raised", exc_info=True)
+        self._pause_timer = None
+        self._paused_until_ms = None
+
+    def _pause_for(self, seconds: float) -> None:
+        """Disable the runtime and schedule an auto-resume timer.
+
+        A new pause replaces any existing one; the pending timer (if
+        any) is cancelled before the new deadline is set.
+        """
+        self._clear_pause(cancel_timer=True)
+        if self._enabled:
+            self._disable()
+        deadline_ms = int(time.monotonic() * 1000) + int(seconds * 1000)
+        self._paused_until_ms = deadline_ms
+        timer = self._timer_factory(seconds, self._on_pause_timeout)
+        # Daemon so a wedged timer cannot pin process exit; pystray
+        # already runs on the main thread and handles signal delivery.
+        # Test fakes without a ``daemon`` attribute are fine; the real
+        # ``threading.Timer`` accepts the assignment.
+        with contextlib.suppress(AttributeError):
+            timer.daemon = True
+        self._pause_timer = timer
+        timer.start()
+
+    def _pause_indefinite(self) -> None:
+        self._clear_pause(cancel_timer=True)
+        if self._enabled:
+            self._disable()
+        self._paused_until_ms = PAUSE_INDEFINITE
+
+    def _on_pause_timeout(self) -> None:
+        """Timer callback: clear the pause and re-enable the runtime."""
+        self._pause_timer = None
+        self._paused_until_ms = None
+        self._enable()
+
+    def _resume(self) -> None:
+        """Manual ``Resume now`` action."""
+        self._clear_pause(cancel_timer=True)
+        self._enable()
+
+    def _on_pause_15m(self, _icon: Any, _item: Any) -> None:
+        self._pause_for(_PAUSE_15M_SECONDS)
+
+    def _on_pause_1h(self, _icon: Any, _item: Any) -> None:
+        self._pause_for(_PAUSE_1H_SECONDS)
+
+    def _on_pause_indefinite(self, _icon: Any, _item: Any) -> None:
+        self._pause_indefinite()
+
+    def _on_resume_now(self, _icon: Any, _item: Any) -> None:
+        self._resume()
 
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
@@ -149,6 +227,20 @@ class TrayApp:
                 "Enable",
                 self._on_toggle_enabled,
                 checked=lambda _item: self._enabled,
+            ),
+            pystray.MenuItem(
+                "Pause",
+                pystray.Menu(
+                    pystray.MenuItem("15 minutes", self._on_pause_15m),
+                    pystray.MenuItem("1 hour", self._on_pause_1h),
+                    pystray.MenuItem("Until I resume", self._on_pause_indefinite),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem(
+                        "Resume now",
+                        self._on_resume_now,
+                        enabled=lambda _item: self._is_paused,
+                    ),
+                ),
             ),
         )
 
