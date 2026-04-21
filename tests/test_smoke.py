@@ -11,7 +11,7 @@ def test_version_is_set():
 
 def test_module_runs():
     # `python -m clipwarden --version` is the non-blocking smoke path;
-    # the bare invocation starts the watcher and blocks on Ctrl-C.
+    # the bare invocation starts the tray and blocks until Quit.
     result = subprocess.run(
         [sys.executable, "-m", "clipwarden", "--version"],
         capture_output=True,
@@ -20,4 +20,19 @@ def test_module_runs():
     )
     assert result.returncode == 0
     assert clipwarden.__version__ in result.stdout
+    assert "ClipWarden" in result.stdout
+
+
+def test_headless_flag_is_accepted():
+    # Regression guard for the Phase B __main__ rewrite: --headless
+    # must still parse cleanly. Combining with --version exits before
+    # the runtime starts, which is enough to prove the flag is wired
+    # without hanging pytest on a real watcher loop.
+    result = subprocess.run(
+        [sys.executable, "-m", "clipwarden", "--headless", "--version"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0
     assert "ClipWarden" in result.stdout
