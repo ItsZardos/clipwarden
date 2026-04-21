@@ -26,17 +26,28 @@ Startup sequence (tray / headless paths):
 5. Run the selected mode's blocking loop.
 6. On exit, stop the runtime (idempotent -- tray's Quit handler also
    calls stop).
+
+Unhandled exceptions at any point during startup or the main loop
+are caught by the outer ``main`` wrapper and written to
+``%APPDATA%\\ClipWarden\\crash.log`` before a MessageBox surfaces the
+failure. ``build/launcher.py`` duplicates the fallback in stdlib-only
+form so import-time failures (which happen before this module's
+handler can run) still land in the same file.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
+import datetime
 import logging
 import signal
 import sys
 import threading
+import traceback
 from pathlib import Path
+from types import TracebackType
 
 import win32api
 
@@ -63,6 +74,8 @@ _MB_OK_ERROR = 0x00000010
 _SECOND_INSTANCE_TITLE = "ClipWarden"
 _SECOND_INSTANCE_BODY = "ClipWarden is already running. Check your system tray."
 _STARTUP_FAILURE_TITLE = "ClipWarden failed to start"
+
+_CRASH_LOG_NAME = "crash.log"
 
 # SetProcessDpiAwarenessContext sentinel. ``-4`` is
 # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703+),
@@ -120,6 +133,61 @@ def _enable_dpi_awareness() -> None:
         log.debug("SetProcessDPIAware fallback failed", exc_info=True)
 
 
+def _crash_log_dir() -> Path | None:
+    """Resolve the directory for crash.log.
+
+    Uses :func:`clipwarden.paths.appdata_dir`, i.e. ``%APPDATA%\\ClipWarden``
+    on Windows (Roaming profile). Standardising on Roaming keeps every
+    piece of user-writable state in one place: config.json, whitelist.json,
+    log.jsonl, and crash.log all live side by side. The binary is
+    installed under ``%LOCALAPPDATA%\\Programs\\ClipWarden`` by the
+    installer, but nothing is written there at runtime.
+
+    Returns None only if the resolver itself raises -- for example, a
+    broken APPDATA environment with no fallback. The crash handler must
+    never itself raise, so we swallow and let the caller fall through
+    to a bare MessageBox.
+    """
+    try:
+        return _paths.appdata_dir()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_crash_log(
+    exc_type: type[BaseException] | None,
+    exc: BaseException | None,
+    tb: TracebackType | None,
+) -> Path | None:
+    """Append an unhandled-exception record to ``<appdata>/crash.log``.
+
+    This path MUST NOT itself raise; a --noconsole frozen exe has no
+    stderr, so a crash inside the crash handler would be invisible.
+    Any failure here is swallowed.
+    """
+    try:
+        crash_dir = _crash_log_dir()
+        if crash_dir is None:
+            return None
+        crash_dir.mkdir(parents=True, exist_ok=True)
+        crash_file = crash_dir / _CRASH_LOG_NAME
+        with crash_file.open("a", encoding="utf-8") as f:
+            f.write("\n=== " + datetime.datetime.now().isoformat() + " ===\n")
+            f.write(f"ClipWarden {__version__}\n")
+            f.write(f"sys.executable: {sys.executable}\n")
+            f.write(f"sys.argv: {sys.argv}\n")
+            f.write(f"frozen: {getattr(sys, 'frozen', False)}\n")
+            if exc_type is not None:
+                traceback.print_exception(exc_type, exc, tb, file=f)
+            f.flush()
+        return crash_file
+    except Exception:  # noqa: BLE001
+        # Crash-logging must never itself crash. Silent failure here
+        # is acceptable because the next-best signal (stderr) is not
+        # available in the --noconsole packaged build anyway.
+        return None
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="clipwarden", description=f"ClipWarden {__version__}")
     p.add_argument(
@@ -172,12 +240,18 @@ def _show_second_instance_message() -> None:
     _show_message(_SECOND_INSTANCE_TITLE, _SECOND_INSTANCE_BODY, _MB_OK_INFO)
 
 
-def _show_startup_failure(err: BaseException) -> None:
+def _show_startup_failure(err: BaseException, crash_path: Path | None = None) -> None:
     try:
         log_path: Path | str = _paths.log_path()
     except Exception:  # noqa: BLE001
         log_path = "<unavailable>"
-    body = f"ClipWarden could not start.\n\n{type(err).__name__}: {err}\n\nLog file:\n{log_path}"
+    crash_line = f"\n\nCrash log:\n{crash_path}" if crash_path is not None else ""
+    body = (
+        f"ClipWarden could not start.\n\n"
+        f"{type(err).__name__}: {err}\n\n"
+        f"Log file:\n{log_path}"
+        f"{crash_line}"
+    )
     _show_message(_STARTUP_FAILURE_TITLE, body, _MB_OK_ERROR)
 
 
@@ -276,7 +350,7 @@ def _uninstall_autostart() -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_inner(argv: list[str] | None) -> int:
     # Must run before any GUI code (Tk, pystray, win32 MessageBox)
     # creates its first window; a window inherits its process's DPI
     # awareness context at creation time and cannot be upgraded
@@ -303,15 +377,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     with handle:
-        try:
-            if args.headless:
-                print(f"ClipWarden {__version__} - headless. Ctrl-C to exit.", flush=True)
-                return _run_headless()
-            return _run_tray()
-        except Exception as err:  # noqa: BLE001
+        if args.headless:
+            print(f"ClipWarden {__version__} - headless. Ctrl-C to exit.", flush=True)
+            return _run_headless()
+        return _run_tray()
+
+
+def main(argv: list[str] | None = None) -> int:
+    # One outer try/except so any unhandled exception -- argparse
+    # failure, singleton acquire, runtime construction, tray event
+    # loop -- produces a crash.log entry plus a visible MessageBox.
+    # Silent exits in a --noconsole frozen build are unacceptable for
+    # shipped users, so we catch BaseException here (not just
+    # Exception) and write the traceback to disk before the MessageBox.
+    try:
+        return _main_inner(argv)
+    except SystemExit:
+        raise
+    except BaseException as err:  # noqa: BLE001
+        with contextlib.suppress(Exception):
             log.exception("ClipWarden startup failed")
-            _show_startup_failure(err)
-            return 1
+        crash_path = _write_crash_log(type(err), err, err.__traceback__)
+        with contextlib.suppress(Exception):
+            _show_startup_failure(err, crash_path)
+        return 1
 
 
 if __name__ == "__main__":
