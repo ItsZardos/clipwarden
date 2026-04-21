@@ -15,6 +15,7 @@ first, which for a security tool is the worst failure mode.
 
 from __future__ import annotations
 
+import concurrent.futures
 from typing import Any
 
 import pytest
@@ -33,6 +34,25 @@ from clipwarden.alert import (
 )
 from clipwarden.config import AlertConfig
 from clipwarden.detector import DetectionEvent
+
+
+class _SyncExecutor(concurrent.futures.Executor):
+    """Executor that runs submitted callables on the calling thread.
+
+    Used by ``ToastChannel`` tests so the assertion can observe the
+    toast's side effect without waiting for a background thread.
+    """
+
+    def submit(self, fn, /, *args, **kwargs):  # type: ignore[override]
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001
+            future.set_exception(exc)
+        return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:  # type: ignore[override]
+        return None
 
 
 def _sample_event() -> AlertEvent:
@@ -197,6 +217,23 @@ class TestAlertDispatcher:
         # One "raised" for the broken channel.
         assert any("raised" in m for m in messages)
 
+    def test_dispatch_propagates_base_exception(self) -> None:
+        """KeyboardInterrupt / SystemExit must reach the worker loop.
+
+        Swallowing ``BaseException`` here would turn ``Ctrl-C`` into
+        a silent no-op from the point of view of the worker, which
+        then never exits. ``Exception`` is still contained so a buggy
+        channel cannot kill the dispatcher.
+        """
+        propagating = _RecordingChannel(raise_on_fire=KeyboardInterrupt())
+        later = _RecordingChannel()
+        d = AlertDispatcher([propagating, later])
+
+        with pytest.raises(KeyboardInterrupt):
+            d.dispatch(_sample_event())
+        # ``later`` must not have been called; BaseException short-circuits.
+        assert later.calls == []
+
 
 class TestPopupChannel:
     def test_fire_spawns_daemon_thread_with_correct_name(self, monkeypatch) -> None:
@@ -257,6 +294,45 @@ class TestPopupChannel:
         )
         ch.fire(_sample_event())
 
+    def test_popup_fires_beyond_cap_are_dropped(self, monkeypatch) -> None:
+        """A burst of detections must not spawn unbounded Tk roots."""
+        monkeypatch.setattr(alert_mod, "_default_tk_factory", _RecordingTkPopup)
+
+        deferred: list[Any] = []
+
+        class _DeferThread:
+            def __init__(
+                self,
+                *,
+                target: Any,
+                args: tuple = (),
+                name: str | None = None,
+                daemon: bool | None = None,
+            ) -> None:
+                self.target = target
+                self.args = args
+                self.name = name
+                self.daemon = daemon
+                self.started = False
+                deferred.append(self)
+
+            def start(self) -> None:
+                self.started = True
+
+        ch = PopupChannel(
+            thread_factory=_DeferThread,
+            tk_factory=_RecordingTkPopup,
+            max_concurrent=2,
+        )
+        for _ in range(5):
+            ch.fire(_sample_event())
+        assert len(deferred) == 2, "should have stopped accepting after reaching cap"
+        # Let one popup finish; a seat opens for one more.
+        t = deferred[0]
+        t.target(*t.args)
+        ch.fire(_sample_event())
+        assert len(deferred) == 3
+
 
 class TestSoundChannel:
     def test_fire_spawns_daemon_thread_with_correct_name(self) -> None:
@@ -308,7 +384,7 @@ class TestToastChannel:
             def notify_substitution(self, ev: Any) -> None:
                 seen.append(ev)
 
-        ch = ToastChannel(_FakeNotifier())
+        ch = ToastChannel(_FakeNotifier(), executor=_SyncExecutor())
         event = _sample_event()
         ch.fire(event)
 
@@ -319,6 +395,66 @@ class TestToastChannel:
         assert shim.after == event.after
         assert shim.elapsed_ms == event.elapsed_ms
         assert shim.ts_ms == event.ts_ms
+
+    def test_default_executor_isolates_slow_notifier(self) -> None:
+        """A slow toast must not block the caller of fire().
+
+        The dispatcher calls each channel sequentially; if the toast
+        call stalled, the popup / sound / tray-flash channels that
+        come after it would be stalled too. Pushing the call onto a
+        single-slot worker executor gives the dispatcher a bounded
+        return latency.
+        """
+        import threading as _thr
+        import time as _time
+
+        gate = _thr.Event()
+
+        class _SlowNotifier:
+            def __init__(self) -> None:
+                self.ran = _thr.Event()
+
+            def notify_substitution(self, _ev: Any) -> None:
+                self.ran.set()
+                gate.wait(timeout=2.0)
+
+        slow = _SlowNotifier()
+        ch = ToastChannel(slow)
+        try:
+            t0 = _time.monotonic()
+            ch.fire(_sample_event())
+            elapsed = _time.monotonic() - t0
+            assert elapsed < 0.2, f"fire blocked for {elapsed:.2f}s"
+            assert slow.ran.wait(timeout=1.0)
+        finally:
+            gate.set()
+            ch.close(wait=True)
+
+    def test_drops_second_fire_while_worker_busy(self) -> None:
+        """While one toast is running the next fire is dropped, not queued."""
+        import threading as _thr
+
+        gate = _thr.Event()
+        seen: list[Any] = []
+
+        class _BlockingNotifier:
+            def notify_substitution(self, ev: Any) -> None:
+                seen.append(ev)
+                gate.wait(timeout=2.0)
+
+        ch = ToastChannel(_BlockingNotifier())
+        try:
+            ch.fire(_sample_event())
+            # Wait for the worker to pick up the first call.
+            for _ in range(50):
+                if seen:
+                    break
+                _thr.Event().wait(0.01)
+            ch.fire(_sample_event())
+            gate.set()
+        finally:
+            ch.close(wait=True)
+        assert len(seen) == 1
 
 
 class TestTrayFlashChannel:

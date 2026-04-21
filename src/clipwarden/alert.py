@@ -47,6 +47,7 @@ moving parts at detection time, and the tests can assert on
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import threading
 from collections.abc import Callable
@@ -71,6 +72,11 @@ _POPUP_HEIGHT_PX = 260
 _POPUP_THREAD_NAME = "clipwarden-alert-popup"
 _SOUND_THREAD_NAME = "clipwarden-alert-sound"
 _TRAY_FLASH_SECONDS = 5.0
+# Cap on concurrent popup windows. A burst of detections must not
+# spawn an unbounded number of Tk roots; after this many are live,
+# additional fires are dropped and logged. Three is enough to surface
+# distinct adjacent detections without overwhelming the screen.
+_POPUP_MAX_CONCURRENT = 3
 
 
 @dataclass(frozen=True)
@@ -138,14 +144,30 @@ class AlertDispatcher:
     def channels(self) -> tuple[AlertChannel, ...]:
         return tuple(self._channels)
 
+    def close(self) -> None:
+        """Release any per-channel resources (background workers, etc).
+
+        Channels without a ``close`` method are ignored. Safe to call
+        more than once; channels are responsible for their own
+        idempotence.
+        """
+        for ch in self._channels:
+            closer = getattr(ch, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001
+                    log.exception("channel %s close raised", type(ch).__name__)
+
     def dispatch(self, event: AlertEvent) -> None:
         """Fire every channel in registration order.
 
         A failing channel logs and is skipped; remaining channels
-        still fire. The dispatcher never raises: a crash here would
-        take down the worker thread, and a security tool that
-        silently stops detecting because one channel bugged is a
-        worse failure than a missed popup.
+        still fire. ``Exception`` subclasses are contained so one
+        buggy channel cannot silently stop the dispatcher from
+        running the rest; ``BaseException`` (``KeyboardInterrupt``,
+        ``SystemExit``) is allowed to propagate so shutdown signals
+        still reach the worker loop.
 
         Each call emits an INFO-level breadcrumb per channel so the
         diagnostic log shows the exact dispatch shape when a shipped
@@ -161,26 +183,78 @@ class AlertDispatcher:
         )
         for ch in self._channels:
             name = type(ch).__name__
+            fired_ok = False
             try:
                 ch.fire(event)
-                log.info("channel %s fired ok", name)
+                fired_ok = True
             except Exception:  # noqa: BLE001
                 log.exception("alert channel %s raised", name)
+            if fired_ok:
+                # Emit the breadcrumb after the try block so a logging
+                # failure here does not get misattributed to the channel.
+                log.info("channel %s fired ok", name)
 
 
 class ToastChannel:
-    """Fire a Windows shell toast via the existing :class:`Notifier`."""
+    """Fire a Windows shell toast via the existing :class:`Notifier`.
 
-    def __init__(self, notifier: Any) -> None:
+    Delivery runs on a single-slot background worker. ``fire`` returns
+    immediately, so a slow Windows notification subsystem (Focus
+    Assist, Explorer restart, corrupt action-centre cache) cannot
+    stall the dispatcher and push back on the popup, sound, and
+    tray-flash channels. If a toast is already in flight when a new
+    fire arrives, the new toast is dropped with a diagnostic line
+    rather than queued: toast is the passive channel, stacking them
+    has no user value, and dropping is the documented failure mode.
+    """
+
+    def __init__(
+        self,
+        notifier: Any,
+        *,
+        executor: concurrent.futures.Executor | None = None,
+    ) -> None:
         self._notifier = notifier
+        self._owns_executor = executor is None
+        self._executor = executor or concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="clipwarden-toast",
+        )
+        self._lock = threading.Lock()
+        self._in_flight = 0
 
     def fire(self, event: AlertEvent) -> None:
+        with self._lock:
+            if self._in_flight >= 1:
+                log.info("toast dropped (worker busy)")
+                return
+            self._in_flight += 1
+        try:
+            future = self._executor.submit(self._run, event)
+        except RuntimeError:
+            # Executor was already shut down; swallow so channel
+            # membership during late-shutdown events is non-fatal.
+            with self._lock:
+                self._in_flight = max(0, self._in_flight - 1)
+            log.debug("toast executor rejected submit", exc_info=True)
+            return
+        future.add_done_callback(self._on_done)
+
+    def _run(self, event: AlertEvent) -> None:
         # Reconstitute the DetectionEvent-shaped object the notifier
-        # expects. We use a dataclass-compatible shim rather than
-        # importing DetectionEvent here to keep the alert module
-        # dependency-light; the notifier only reads a small set of
-        # attributes.
+        # expects via a dataclass-compatible shim so this module does
+        # not need to import DetectionEvent. The notifier reads only
+        # a small set of attributes.
         self._notifier.notify_substitution(_ToastShim(event))
+
+    def _on_done(self, _future: concurrent.futures.Future) -> None:
+        with self._lock:
+            self._in_flight = max(0, self._in_flight - 1)
+
+    def close(self, *, wait: bool = True) -> None:
+        """Release the executor owned by this channel, if any."""
+        if self._owns_executor:
+            self._executor.shutdown(wait=wait)
 
 
 @dataclass(frozen=True)
@@ -262,20 +336,24 @@ class SoundChannel:
 class PopupChannel:
     """Topmost custom Tk window. Primary user-facing alert channel.
 
-    Each call to :meth:`fire` spawns a fresh daemon thread that owns
-    its own Tk root, shows the popup, and tears Tk down when the
-    user dismisses the window. Threading per alert sidesteps two
-    problems at once:
+    Each accepted call to :meth:`fire` spawns a fresh daemon thread
+    that owns its own Tk root, shows the popup, and tears Tk down
+    when the user dismisses the window. Threading per alert
+    sidesteps two problems at once:
 
     1. pystray's Win32 backend dispatches menu callbacks from inside
-       a WM_COMMAND handler, which already bit us with a
-       MessageBox-based About dialog. A dedicated thread gives the
-       Tk mainloop its own message pump and sidesteps the issue.
+       a WM_COMMAND handler. A dedicated thread gives the Tk
+       mainloop its own message pump.
 
     2. Tcl/Tk is not safe to share across threads. A long-lived Tk
        mainloop that receives events from the detector thread would
-       require cross-thread marshalling that is easy to get wrong.
-       One root per alert is simple, isolated, and self-cleaning.
+       require cross-thread marshalling; one root per alert is
+       simple, isolated, and self-cleaning.
+
+    Concurrent alerts are capped at ``max_concurrent`` (default 3).
+    A fire that would push the count over the cap is dropped with a
+    log breadcrumb so a burst of detections cannot spawn an
+    unbounded number of Tk roots.
 
     The window is small, modal-to-itself, and focus-grabbing; this
     is deliberate. A security alert that silently scrolls off the
@@ -288,11 +366,24 @@ class PopupChannel:
         *,
         thread_factory: Callable[..., threading.Thread] = threading.Thread,
         tk_factory: Callable[[], Any] | None = None,
+        max_concurrent: int = _POPUP_MAX_CONCURRENT,
     ) -> None:
         self._thread_factory = thread_factory
         self._tk_factory = tk_factory
+        self._max_concurrent = max(1, int(max_concurrent))
+        self._active_lock = threading.Lock()
+        self._active_count = 0
 
     def fire(self, event: AlertEvent) -> None:
+        with self._active_lock:
+            if self._active_count >= self._max_concurrent:
+                log.info(
+                    "popup dropped (active=%d cap=%d)",
+                    self._active_count,
+                    self._max_concurrent,
+                )
+                return
+            self._active_count += 1
         log.info("PopupChannel.fire spawning thread")
         thread = self._thread_factory(
             target=self._run,
@@ -309,6 +400,9 @@ class PopupChannel:
             log.info("popup window dismissed")
         except Exception:  # noqa: BLE001
             log.warning("alert popup failed", exc_info=True)
+        finally:
+            with self._active_lock:
+                self._active_count = max(0, self._active_count - 1)
 
     def _show(self, event: AlertEvent) -> None:
         tk_ctor = self._tk_factory or _default_tk_factory

@@ -169,6 +169,9 @@ class Runtime:
             self._watcher.stop(timeout=per_stage_timeout_s)
         except Exception:  # noqa: BLE001
             log.exception("Watcher stop raised; continuing teardown")
+        if self._alerts is not None:
+            with contextlib.suppress(Exception):
+                self._alerts.close()
         with contextlib.suppress(Exception):
             _logger.close_logger()
         log.info("ClipWarden runtime stopped in %.0f ms", (time.monotonic() - t0) * 1000)
