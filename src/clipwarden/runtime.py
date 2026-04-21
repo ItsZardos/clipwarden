@@ -151,6 +151,17 @@ class Runtime:
         log.info("ClipWarden runtime starting")
         self._watcher.start()
 
+    def reset_detector(self) -> None:
+        """Clear detector memory of the last classified address.
+
+        Called by the tray on enable/disable transitions so a user who
+        paused for hours does not get a stale-baseline alert on their
+        first post-resume copy. Exposed as a method rather than
+        poking ``_detector`` directly so the runtime owns the
+        contract; a future config-reload path should also call this.
+        """
+        self._detector.reset()
+
     def stop(self, *, per_stage_timeout_s: float = 2.0) -> None:
         log.info("ClipWarden runtime stopping")
         t0 = time.monotonic()

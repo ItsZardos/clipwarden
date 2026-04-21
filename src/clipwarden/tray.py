@@ -217,9 +217,13 @@ class TrayApp:
 
         ``Runtime.start`` is idempotent, but we still gate on
         ``_enabled`` to avoid the log noise of a start-when-running
-        call.
+        call. The detector is reset before start so the first
+        classified copy after an enable/disable cycle is treated as a
+        fresh baseline rather than paired with something the user
+        copied hours ago, before pausing.
         """
         if not self._enabled:
+            self._reset_detector_safely()
             try:
                 self._runtime.start()
             except Exception:  # noqa: BLE001
@@ -229,14 +233,38 @@ class TrayApp:
             self._refresh_icon()
 
     def _disable(self) -> None:
-        """Stop the runtime and flip to the disabled state."""
+        """Stop the runtime and flip to the disabled state.
+
+        The detector is also reset on the disable edge so that any
+        stale address memory does not survive a pause; if the user
+        re-enables via a path that skips :meth:`_enable` (there is
+        none today, but the reset keeps the invariant local), state
+        is still clean.
+        """
         if self._enabled:
             try:
                 self._runtime.stop()
             except Exception:  # noqa: BLE001
                 log.exception("runtime.stop failed from tray")
+            self._reset_detector_safely()
             self._enabled = False
             self._refresh_icon()
+
+    def _reset_detector_safely(self) -> None:
+        """Call ``runtime.reset_detector`` and swallow any failure.
+
+        The runtime may legitimately lack this method in very old
+        embeddings (e.g. tests constructing a fake runtime); treat the
+        reset as best-effort so a missing hook never blocks a
+        user-initiated enable/disable.
+        """
+        reset = getattr(self._runtime, "reset_detector", None)
+        if reset is None:
+            return
+        try:
+            reset()
+        except Exception:  # noqa: BLE001
+            log.warning("runtime.reset_detector failed", exc_info=True)
 
     def _on_toggle_enabled(self, _icon: Any, _item: Any) -> None:
         # Manual toggle always wins: if a pause is in flight we cancel

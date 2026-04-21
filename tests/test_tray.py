@@ -56,12 +56,23 @@ class _FakeRuntime:
     def __init__(self) -> None:
         self.starts = 0
         self.stops = 0
+        self.detector_resets = 0
+        # Recorded as an ordered list of operation names so tests can
+        # assert both the count and the relative order of start/stop
+        # and reset calls on each tray transition.
+        self.ops: list[str] = []
 
     def start(self) -> None:
         self.starts += 1
+        self.ops.append("start")
 
     def stop(self) -> None:
         self.stops += 1
+        self.ops.append("stop")
+
+    def reset_detector(self) -> None:
+        self.detector_resets += 1
+        self.ops.append("reset")
 
 
 class _FakeTimer:
@@ -250,6 +261,69 @@ def test_enable_toggle_disables_and_swaps_icon(app, runtime):
     assert app._enabled is True
     assert runtime.starts == 1
     assert app._icon.icon == "image:icon.ico"
+
+
+def test_toggle_cycle_resets_detector_on_both_edges(app, runtime):
+    """Disable and re-enable each clear detector state.
+
+    Stale state across a long pause would otherwise risk pairing the
+    first post-resume copy with something the user copied hours ago;
+    resetting on both edges keeps the first post-resume event a clean
+    baseline regardless of which transition the user hits first.
+    """
+    app._on_toggle_enabled(None, None)
+    app._on_toggle_enabled(None, None)
+    assert runtime.detector_resets == 2
+    # Disable path: stop then reset. Enable path: reset then start.
+    assert runtime.ops == ["stop", "reset", "reset", "start"]
+
+
+def test_pause_flow_resets_detector(app, runtime, timers):
+    """Pause-then-auto-resume should reset the detector on each edge."""
+    app._on_pause_15m(None, None)
+    assert runtime.detector_resets == 1
+    timers[-1].fire()
+    assert runtime.detector_resets == 2
+    assert runtime.ops == ["stop", "reset", "reset", "start"]
+
+
+def test_enable_with_no_reset_hook_still_toggles(paths, monkeypatch):
+    """Runtimes lacking ``reset_detector`` must not block the toggle.
+
+    Older embedders (including fakes in other test suites) may not
+    expose the hook. The tray treats the reset as best-effort so a
+    missing attribute never wedges a user-initiated enable/disable.
+    """
+    monkeypatch.setattr(tray, "_load_image", lambda name: f"image:{name}")
+
+    class _BareRuntime:
+        def __init__(self) -> None:
+            self.starts = 0
+            self.stops = 0
+
+        def start(self) -> None:
+            self.starts += 1
+
+        def stop(self) -> None:
+            self.stops += 1
+
+    bare = _BareRuntime()
+    app = tray.TrayApp(
+        runtime=bare,
+        notifier=SimpleNamespace(),
+        rt_paths=paths,
+        version="1.0.0",
+        icon_factory=_FakeIcon,
+        message_box=lambda *_args, **_kw: 0,
+        timer_factory=lambda *_a, **_k: _FakeTimer(0, lambda: None),
+        thread_factory=_SyncThread,
+        open_path=lambda _p: None,
+    )
+    app.run()
+    app._on_toggle_enabled(None, None)
+    app._on_toggle_enabled(None, None)
+    assert bare.stops == 1
+    assert bare.starts == 1
 
 
 def test_pause_15m_disables_runtime_and_arms_timer(app, runtime, timers):
