@@ -1,15 +1,8 @@
 """pystray tray app wrapping the ClipWarden runtime.
 
-This module is the interactive front-end for the v1 tray build. It
-owns the tray icon, the menu, and the small state machine (enabled /
-paused) that flips between them; everything else continues to live in
+Owns the tray icon, the menu, and the small state machine (enabled /
+paused) that flips between them. Everything else continues to live in
 :mod:`clipwarden.runtime`.
-
-Scaffold commit intentionally ships an empty menu. Follow-up commits
-fill in the Enable toggle, Pause submenu, folder shortcuts, About
-dialog, and Quit action. Keeping the scaffold minimal gives the rest
-of the system (``__main__.py`` rewrite, PyInstaller spec, tests) a
-stable type to target while the menu grows.
 
 Design choices:
 
@@ -28,12 +21,14 @@ Design choices:
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import logging
 import os
 import sys
 import threading
 import time
 from collections.abc import Callable
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +38,79 @@ from PIL import Image
 
 log = logging.getLogger(__name__)
 
+# LoadIconMetric's ``lims`` parameter: LIM_SMALL=0 selects the
+# SM_CXSMICON/SM_CYSMICON frame from a multi-resolution .ico,
+# LIM_LARGE=1 selects SM_CXICON/SM_CYICON. The tray only needs
+# the small size -- Windows picks larger frames itself when
+# Shell_NotifyIcon renders into a HiDPI tray cell.
+_LIM_SMALL = 0
+
+try:
+    _LoadIconMetric = ctypes.windll.comctl32.LoadIconMetric
+    _LoadIconMetric.argtypes = (
+        wintypes.HINSTANCE,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(wintypes.HICON),
+    )
+    # HRESULT is a signed 32-bit; S_OK == 0, anything non-zero is
+    # a failure we fall back from.
+    _LoadIconMetric.restype = ctypes.c_long
+except (OSError, AttributeError):
+    # comctl32 missing LoadIconMetric (pre-Vista) or ctypes denied
+    # access. The subclass falls back to upstream behavior if this
+    # binding is unavailable.
+    _LoadIconMetric = None
+
+
+class _DpiAwareIcon(pystray.Icon):
+    """pystray.Icon that loads the native small-icon frame from the .ico.
+
+    Upstream pystray calls ``LoadImage(IMAGE_ICON, cx=0, cy=0,
+    LR_DEFAULTSIZE)`` which resolves to SM_CXICON (32 px) and forces
+    Shell_NotifyIcon to bitmap-stretch the HICON down to the 16 px
+    tray cell -- softening edges and making the icon read smaller
+    than neighbors that ship a native 16 px master. ``LoadIconMetric``
+    with ``LIM_SMALL`` instead picks the 16 px frame directly from
+    the multi-resolution .ico, and on HiDPI displays Windows selects
+    a larger frame automatically as long as the process is DPI-aware.
+
+    Reference: Microsoft's "Notifications and the Notification Area"
+    guidance, and pystray upstream PR #85 (open since 2021).
+    """
+
+    def _assert_icon_handle(self) -> None:  # noqa: D401
+        if self._icon_handle:
+            return
+        if _LoadIconMetric is None:
+            super()._assert_icon_handle()
+            return
+        from pystray._util import serialized_image
+
+        with serialized_image(self.icon, "ICO") as icon_path:
+            hicon = wintypes.HICON()
+            try:
+                hr = _LoadIconMetric(
+                    None,
+                    str(icon_path),
+                    _LIM_SMALL,
+                    ctypes.byref(hicon),
+                )
+            except OSError:
+                hr = -1
+            if hr == 0 and hicon.value:
+                self._icon_handle = hicon.value
+                return
+            log.debug(
+                "LoadIconMetric failed (hr=%s); falling back to pystray default",
+                hr,
+            )
+            super()._assert_icon_handle()
+
+
 _ICON_NORMAL = "icon.ico"
 _ICON_DISABLED = "icon-disabled.ico"
+_ICON_ALERT = "icon-alert.ico"
 _TRAY_TITLE = "ClipWarden"
 
 _PAUSE_15M_SECONDS = 15 * 60
@@ -96,9 +162,10 @@ class TrayApp:
         notifier: Any,
         rt_paths: Any,
         version: str,
-        icon_factory: Callable[..., Any] = pystray.Icon,
+        icon_factory: Callable[..., Any] = _DpiAwareIcon,
         message_box: Callable[..., int] = win32api.MessageBox,
         timer_factory: Callable[..., threading.Timer] = threading.Timer,
+        thread_factory: Callable[..., threading.Thread] = threading.Thread,
         open_path: Callable[[str], Any] = os.startfile,
     ) -> None:
         self._runtime = runtime
@@ -108,14 +175,28 @@ class TrayApp:
         self._icon_factory = icon_factory
         self._message_box = message_box
         self._timer_factory = timer_factory
+        self._thread_factory = thread_factory
         self._open_path = open_path
 
         self._enabled: bool = True
         self._paused_until_ms: int | None = None
         self._pause_timer: Any | None = None
         self._icon: Any | None = None
+        # Post-detection alert flash. A single pending timer at any
+        # time; a new flash cancels the existing timer and starts a
+        # fresh one so overlapping detections extend the red state
+        # rather than truncating it early.
+        self._flash_timer: Any | None = None
+        self._flashing: bool = False
 
     def _current_image(self) -> Image.Image:
+        # Flash state wins over enabled/disabled so a detection that
+        # fires while paused still shows a visible red state for the
+        # flash window. Pause-state itself is preserved: the timer
+        # just reverts to whichever base icon is correct at the
+        # moment the flash expires.
+        if self._flashing:
+            return _load_image(_ICON_ALERT)
         return _load_image(_ICON_NORMAL if self._enabled else _ICON_DISABLED)
 
     def _refresh_icon(self) -> None:
@@ -214,6 +295,39 @@ class TrayApp:
         self._paused_until_ms = None
         self._enable()
 
+    def flash(self, duration_s: float = 5.0) -> None:
+        """Swap to the alert icon for ``duration_s`` seconds.
+
+        Designed to be called from any thread by the alert dispatcher's
+        TrayFlashChannel. A flash in progress is reset (new deadline
+        replaces the old one) rather than stacked; a second detection
+        inside the flash window still gets its popup + toast + log,
+        and the tray just re-arms the timer so the user sees red for
+        the full duration after the most recent detection.
+
+        Safe to call before ``run()`` constructs the icon; the flash
+        state is recorded and applied once the icon exists. No-op if
+        the tray has already been stopped.
+        """
+        if self._flash_timer is not None:
+            try:
+                self._flash_timer.cancel()
+            except Exception:  # noqa: BLE001
+                log.debug("prior flash timer cancel raised", exc_info=True)
+            self._flash_timer = None
+        self._flashing = True
+        self._refresh_icon()
+        timer = self._timer_factory(duration_s, self._on_flash_timeout)
+        with contextlib.suppress(AttributeError):
+            timer.daemon = True
+        self._flash_timer = timer
+        timer.start()
+
+    def _on_flash_timeout(self) -> None:
+        self._flash_timer = None
+        self._flashing = False
+        self._refresh_icon()
+
     def _resume(self) -> None:
         """Manual ``Resume now`` action."""
         self._clear_pause(cancel_timer=True)
@@ -277,11 +391,28 @@ class TrayApp:
             "Released under the MIT License"
         )
 
-    def _on_about(self, _icon: Any, _item: Any) -> None:
+    def _show_about_message(self) -> None:
         try:
             self._message_box(0, self._about_body(), _ABOUT_TITLE, _MB_OK_INFO)
         except Exception:  # noqa: BLE001
             log.warning("About MessageBox failed", exc_info=True)
+
+    def _on_about(self, _icon: Any, _item: Any) -> None:
+        # Showing a modal MessageBox directly from the pystray menu
+        # callback deadlocks on the Win32 backend: the callback runs
+        # inside the tray's WM_COMMAND handler while TrackPopupMenu
+        # still holds input capture, so the dialog's OK button and
+        # close icon become unresponsive. Spawning a dedicated thread
+        # gives the MessageBox its own modal message pump and lets
+        # the tray thread continue handling menu teardown. A daemon
+        # thread is fine: if the user quits while the dialog is up,
+        # Windows tears the dialog down with the process.
+        thread = self._thread_factory(
+            target=self._show_about_message,
+            name="clipwarden-about-dialog",
+            daemon=True,
+        )
+        thread.start()
 
     def _on_quit(self, _icon: Any, _item: Any) -> None:
         """Tear down the runtime then signal the tray loop to exit.
@@ -293,6 +424,13 @@ class TrayApp:
         idempotent so the second call is harmless.
         """
         self._clear_pause(cancel_timer=True)
+        if self._flash_timer is not None:
+            try:
+                self._flash_timer.cancel()
+            except Exception:  # noqa: BLE001
+                log.debug("flash timer cancel raised on Quit", exc_info=True)
+            self._flash_timer = None
+        self._flashing = False
         try:
             self._runtime.stop()
         except Exception:  # noqa: BLE001
