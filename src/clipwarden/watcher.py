@@ -73,9 +73,22 @@ _DEFAULT_QUEUE_MAX = 256
 _CLIPBOARD_OPEN_RETRIES = 3
 _CLIPBOARD_OPEN_BACKOFF_S = 0.010
 _PUMP_TIMEOUT_MS = 100
+_DEFAULT_START_TIMEOUT_S = 5.0
 
 
 ClipboardEventCallback = Callable[["ClipboardEvent"], None]
+
+
+class WatcherStartError(RuntimeError):
+    """Raised when the watcher fails to come up within the start timeout.
+
+    Either the pump thread could not create its message-only window,
+    ``AddClipboardFormatListener`` failed, or the pump never reached
+    the signal point before the caller's deadline. Callers surface
+    this to the user (MessageBox plus ``crash.log``) rather than
+    silently continuing with a runtime that never sees any clipboard
+    events.
+    """
 
 
 @dataclass(frozen=True)
@@ -184,6 +197,14 @@ class Watcher:
         self._self_write_seq: int | None = None
         self._running = False
         self._dropped_count = 0
+        # Start-time handshake: the pump thread signals ``_ready`` once
+        # its message window exists and the clipboard listener is
+        # subscribed. ``start()`` blocks on this so a caller that gets
+        # a non-exceptional return is guaranteed to be receiving
+        # clipboard updates. ``_start_error`` carries the pump's
+        # initialisation exception back across the thread boundary.
+        self._ready = threading.Event()
+        self._start_error: BaseException | None = None
         # Win32 requires a strong reference to the WndProc callable for
         # the lifetime of the window; without it the closure is GC'd
         # and the next dispatched message causes an access violation.
@@ -215,9 +236,20 @@ class Watcher:
             raise ValueError("sequence numbers are non-negative")
         self._self_write_seq = next_seq
 
-    def start(self) -> None:
+    def start(self, *, timeout: float = _DEFAULT_START_TIMEOUT_S) -> None:
+        """Start the pump and worker threads, blocking until ready.
+
+        Returns only after the pump thread has created its
+        message-only window and subscribed to clipboard updates. If
+        setup fails or the handshake does not arrive within
+        ``timeout`` seconds, raises :class:`WatcherStartError` after
+        best-effort teardown so the caller sees a clean failure
+        instead of a silently-broken runtime.
+        """
         if self._running:
             return
+        self._ready.clear()
+        self._start_error = None
         self._running = True
         win32event.ResetEvent(self._stop_handle)
         self._worker_thread = threading.Thread(
@@ -232,6 +264,34 @@ class Watcher:
             daemon=True,
         )
         self._pump_thread.start()
+        if not self._ready.wait(timeout=timeout):
+            self._abort_failed_start(
+                WatcherStartError(f"Clipboard watcher did not become ready within {timeout:.1f}s")
+            )
+        if self._start_error is not None:
+            err = self._start_error
+            self._abort_failed_start(err)
+
+    def _abort_failed_start(self, err: BaseException) -> None:
+        # Tear down the half-started pump and worker so the caller's
+        # retry on a fresh Watcher starts from a clean baseline.
+        self._running = False
+        win32event.SetEvent(self._stop_handle)
+        if self._pump_tid:
+            with contextlib.suppress(pywintypes.error):
+                win32gui.PostThreadMessage(self._pump_tid, WM_WAKE, 0, 0)
+        with contextlib.suppress(Exception):
+            self._queue.put_nowait(None)
+        if self._pump_thread is not None:
+            self._pump_thread.join(timeout=1.0)
+        if self._worker_thread is not None:
+            self._worker_thread.join(timeout=1.0)
+        self._pump_thread = None
+        self._worker_thread = None
+        self._pump_tid = 0
+        if isinstance(err, WatcherStartError):
+            raise err
+        raise WatcherStartError(str(err) or type(err).__name__) from err
 
     def stop(self, timeout: float = 2.0) -> None:
         """Stop both threads with a bounded join.
@@ -269,11 +329,20 @@ class Watcher:
         try:
             self._create_window()
             _add_clipboard_listener(self._hwnd)
-        except Exception:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001
             log.exception("Watcher pump failed to initialise")
+            self._start_error = exc
             self._teardown_window()
+            # Signal after recording the error so ``start()`` picks
+            # up the failure rather than blocking on ``_ready.wait``
+            # until the timeout.
+            self._ready.set()
             return
 
+        # Publish readiness only after both the window exists and the
+        # listener is subscribed; a caller that sees start() return
+        # normally is guaranteed to receive clipboard updates.
+        self._ready.set()
         try:
             while self._running:
                 rc = win32event.MsgWaitForMultipleObjects(

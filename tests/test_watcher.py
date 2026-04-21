@@ -27,7 +27,12 @@ from unittest.mock import patch
 import pytest
 
 from clipwarden import watcher as w
-from clipwarden.watcher import ClipboardEvent, Watcher, read_clipboard_text
+from clipwarden.watcher import (
+    ClipboardEvent,
+    Watcher,
+    WatcherStartError,
+    read_clipboard_text,
+)
 
 # --- Enqueue / worker behaviour -------------------------------------------
 
@@ -238,3 +243,89 @@ def test_start_is_idempotent():
         wx.start()
         wx.start()  # second start is a no-op
         wx.stop(timeout=2.0)
+
+
+# --- Start-time handshake -------------------------------------------------
+
+
+def test_start_blocks_until_listener_subscribes():
+    """``start()`` returns only after the pump reaches the ready signal.
+
+    Stalling the ctypes listener call until the main thread releases
+    a gate lets us observe that ``start()`` is still waiting while
+    the pump is mid-init, and that the event becomes observable only
+    after the listener returns.
+    """
+    gate = threading.Event()
+
+    def slow_add(_hwnd):
+        gate.wait(timeout=2.0)
+
+    wx, _ = _make_watcher()
+    with (
+        patch.object(w, "_add_clipboard_listener", slow_add),
+        patch.object(w, "_remove_clipboard_listener", lambda _h: None),
+    ):
+        caller_done = threading.Event()
+
+        def run_start():
+            wx.start(timeout=2.0)
+            caller_done.set()
+
+        t = threading.Thread(target=run_start, daemon=True)
+        t.start()
+        # Give the pump a moment to enter slow_add; start() should
+        # still be blocked on _ready.wait while the gate is closed.
+        time.sleep(0.1)
+        assert not caller_done.is_set(), "start() returned before listener subscribed"
+        gate.set()
+        t.join(timeout=2.0)
+        assert caller_done.is_set()
+        wx.stop(timeout=2.0)
+
+
+def test_start_raises_when_listener_fails():
+    """Listener registration failures surface as WatcherStartError.
+
+    The pump's ``AddClipboardFormatListener`` raising should abort
+    ``start()`` with a clean exception rather than returning a
+    silently-broken watcher that never sees clipboard events.
+    """
+
+    def boom(_hwnd):
+        raise OSError("simulated listener failure")
+
+    wx, _ = _make_watcher()
+    with (
+        patch.object(w, "_add_clipboard_listener", boom),
+        patch.object(w, "_remove_clipboard_listener", lambda _h: None),
+        pytest.raises(WatcherStartError),
+    ):
+        wx.start(timeout=1.0)
+    # Teardown must leave the watcher in a non-running state so a
+    # fresh Watcher created by the caller's retry path starts clean.
+    assert wx._running is False
+    assert wx._pump_thread is None
+    assert wx._worker_thread is None
+
+
+def test_start_raises_on_handshake_timeout():
+    """If the pump never reaches ready, start() times out and raises.
+
+    Holding the listener indefinitely models a wedged Win32 call. The
+    caller must see a WatcherStartError rather than blocking forever
+    or silently proceeding.
+    """
+    stuck = threading.Event()  # never set
+
+    def never_return(_hwnd):
+        stuck.wait(timeout=10.0)
+
+    wx, _ = _make_watcher()
+    with (
+        patch.object(w, "_add_clipboard_listener", never_return),
+        patch.object(w, "_remove_clipboard_listener", lambda _h: None),
+        pytest.raises(WatcherStartError),
+    ):
+        wx.start(timeout=0.2)
+    stuck.set()
