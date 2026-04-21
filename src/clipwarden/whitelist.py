@@ -23,10 +23,15 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from .classifier import Chain, classify
+
+log = logging.getLogger(__name__)
 
 
 class WhitelistError(ValueError):
@@ -41,6 +46,11 @@ class WhitelistEntry:
     note: str = ""
 
 
+def _normalize_chain(chain: str) -> str:
+    """Normalize the chain token to its canonical uppercase form."""
+    return chain.strip().upper()
+
+
 def _normalize(chain: str, address: str) -> str:
     # Case sensitivity by chain:
     # - ETH: hex is hex; lowercased is canonical.
@@ -48,6 +58,7 @@ def _normalize(chain: str, address: str) -> str:
     #   already tolerates BC1/bc1 prefix, but the payload charset is
     #   lowercase by spec). We lowercase to be safe.
     # - BTC base58, SOL, XMR: case matters.
+    chain = _normalize_chain(chain)
     if chain == "ETH":
         return address.lower()
     if chain == "BTC" and address.lower().startswith("bc1"):
@@ -55,29 +66,63 @@ def _normalize(chain: str, address: str) -> str:
     return address
 
 
+def _validate_pair(chain: str, address: str) -> str:
+    """Return the canonical chain token for ``(chain, address)``.
+
+    Raises :class:`WhitelistError` if the classifier disagrees with
+    the claimed chain or if the address fails validation for any
+    chain. Used by ``Whitelist.add`` so API callers cannot silently
+    store a mismatched pair, and by ``Whitelist.load`` so hand-edited
+    JSON files surface the mismatch loudly instead of storing a row
+    that can never match a real detection.
+    """
+    canonical = _normalize_chain(chain)
+    classified = classify(address)
+    if classified is None:
+        raise WhitelistError(
+            f"address does not validate for any supported chain: {address!r}"
+        )
+    if classified.chain.value != canonical:
+        raise WhitelistError(
+            f"claimed chain {canonical!r} does not match classifier "
+            f"result {classified.chain.value!r} for address {address!r}"
+        )
+    return canonical
+
+
 class Whitelist:
     def __init__(self, entries: list[WhitelistEntry] | None = None) -> None:
         self._entries: dict[tuple[str, str], WhitelistEntry] = {}
         for e in entries or []:
-            self._entries[(e.chain, _normalize(e.chain, e.address))] = e
+            chain = _normalize_chain(e.chain)
+            self._entries[(chain, _normalize(chain, e.address))] = e
 
     def __len__(self) -> int:
         return len(self._entries)
 
     def contains(self, chain: str, address: str) -> bool:
+        chain = _normalize_chain(chain)
         return (chain, _normalize(chain, address)) in self._entries
 
     def add(self, chain: str, address: str, note: str = "") -> WhitelistEntry:
+        """Add ``(chain, address)`` to the whitelist.
+
+        Raises :class:`WhitelistError` if the classifier disagrees
+        with the claimed chain so API callers cannot silently store a
+        pair that would never match a real detection.
+        """
+        canonical = _validate_pair(chain, address)
         entry = WhitelistEntry(
-            chain=chain,
+            chain=canonical,
             address=address,
             added_at=datetime.now(UTC).isoformat(timespec="seconds"),
             note=note,
         )
-        self._entries[(chain, _normalize(chain, address))] = entry
+        self._entries[(canonical, _normalize(canonical, address))] = entry
         return entry
 
     def remove(self, chain: str, address: str) -> bool:
+        chain = _normalize_chain(chain)
         key = (chain, _normalize(chain, address))
         if key in self._entries:
             del self._entries[key]
@@ -119,29 +164,47 @@ class Whitelist:
             if not isinstance(items, list):
                 raise WhitelistError("whitelist.entries must be a list")
         except (OSError, json.JSONDecodeError, WhitelistError):
-            # If the rename itself fails (e.g. the file is locked), an
-            # empty whitelist is still the safer outcome: on next save
-            # the good file reappears and the user can recover manually.
+            # Rename the bad file aside, then re-persist an empty
+            # whitelist so the on-disk state is consistent. A read-only
+            # profile will fail the save; in-memory state is still
+            # valid and the next successful save reappears the file.
+            wl = cls()
             with contextlib.suppress(OSError):
                 _backup_corrupt(path)
-            return cls()
+            with contextlib.suppress(OSError):
+                wl.save(path)
+            return wl
         parsed: list[WhitelistEntry] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             try:
-                parsed.append(
-                    WhitelistEntry(
-                        chain=str(item["chain"]),
-                        address=str(item["address"]),
-                        added_at=str(item["added_at"]),
-                        note=str(item.get("note", "")),
-                    )
-                )
+                chain_raw = str(item["chain"])
+                address = str(item["address"])
+                added_at = str(item["added_at"])
+                note = str(item.get("note", ""))
             except KeyError:
                 # Skip malformed entries rather than nuking the whole file.
                 # The Settings UI will show the rest and the user can re-add.
                 continue
+            try:
+                canonical = _validate_pair(chain_raw, address)
+            except WhitelistError as exc:
+                log.warning(
+                    "whitelist: dropping invalid entry chain=%r address=%r: %s",
+                    chain_raw,
+                    address,
+                    exc,
+                )
+                continue
+            parsed.append(
+                WhitelistEntry(
+                    chain=canonical,
+                    address=address,
+                    added_at=added_at,
+                    note=note,
+                )
+            )
         return cls(parsed)
 
     def save(self, path: Path) -> None:
@@ -154,8 +217,7 @@ class Whitelist:
 
 def _backup_corrupt(path: Path) -> Path:
     # Millisecond suffix matches config.py so rapid successive
-    # corruptions don't clobber each other's backups and the two
-    # modules stay diff-shaped.
+    # corruptions do not clobber each other's backups.
     ts = int(time.time() * 1000)
     target = path.with_suffix(path.suffix + f".bak-{ts}")
     path.rename(target)

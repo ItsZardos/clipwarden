@@ -210,12 +210,17 @@ def load(path: Path) -> Config:
                 save(cfg, path)
         return cfg
     except (OSError, json.JSONDecodeError, ConfigError):
-        # If we cannot even rename the bad file, defaults are still the
-        # safer outcome for a security tool; the user will notice on
-        # next save when the file reappears.
+        # Rename the bad file aside, then immediately re-persist
+        # defaults so the on-disk state is consistent: backup present,
+        # primary path rebuilt with a valid file. A read-only profile
+        # will fail the save; in-memory defaults still apply and the
+        # next successful save reappears the file.
+        cfg = default_config()
         with contextlib.suppress(OSError):
             _backup_corrupt(path)
-        return default_config()
+        with contextlib.suppress(OSError):
+            save(cfg, path)
+        return cfg
 
 
 # Legacy keys that existed in a prior release but no longer do. We

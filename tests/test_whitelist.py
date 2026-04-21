@@ -127,17 +127,20 @@ def test_load_entries_not_list_returns_empty(tmp_path: Path) -> None:
 
 
 def test_load_corrupt_json_backs_up_file(tmp_path: Path) -> None:
-    """Unparseable JSON is renamed aside rather than silently overwritten.
+    """Unparseable JSON is renamed aside and replaced with an empty file.
 
     Silently returning an empty whitelist and then having the next
     save() clobber the bad file would destroy user-trusted pairs
-    without evidence. The backup file is the user's escape hatch.
+    without evidence. The backup file is the user's escape hatch;
+    the primary path is immediately re-persisted so downstream
+    tooling can assume the file exists.
     """
     p = tmp_path / "whitelist.json"
     p.write_text("{not json", encoding="utf-8")
     wl = Whitelist.load(p)
     assert len(wl) == 0
-    assert not p.exists()
+    assert p.exists(), "primary path must be re-persisted after backup"
+    assert json.loads(p.read_text(encoding="utf-8")) == {"entries": []}
     backups = sorted(tmp_path.glob("whitelist.json.bak-*"))
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == "{not json"
@@ -147,7 +150,8 @@ def test_load_non_object_root_backs_up_file(tmp_path: Path) -> None:
     p = tmp_path / "whitelist.json"
     p.write_text("[]", encoding="utf-8")
     assert len(Whitelist.load(p)) == 0
-    assert not p.exists()
+    assert p.exists()
+    assert json.loads(p.read_text(encoding="utf-8")) == {"entries": []}
     assert len(list(tmp_path.glob("whitelist.json.bak-*"))) == 1
 
 
@@ -155,7 +159,8 @@ def test_load_entries_not_list_backs_up_file(tmp_path: Path) -> None:
     p = tmp_path / "whitelist.json"
     p.write_text(json.dumps({"entries": "nope"}), encoding="utf-8")
     assert len(Whitelist.load(p)) == 0
-    assert not p.exists()
+    assert p.exists()
+    assert json.loads(p.read_text(encoding="utf-8")) == {"entries": []}
     assert len(list(tmp_path.glob("whitelist.json.bak-*"))) == 1
 
 
@@ -186,3 +191,83 @@ def test_load_skips_malformed_entries(tmp_path: Path) -> None:
     wl = Whitelist.load(p)
     assert len(wl) == 1
     assert wl.contains("BTC", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+
+
+def test_add_rejects_mismatched_chain() -> None:
+    """Chain/address classifier disagreement must raise.
+
+    Callers that try to whitelist an ETH address under the BTC chain
+    would never produce a matching entry; silently accepting the row
+    would leave the user expecting protection they do not have.
+    """
+    wl = Whitelist()
+    import pytest  # noqa: PLC0415
+
+    with pytest.raises(WhitelistError):
+        wl.add("BTC", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+    with pytest.raises(WhitelistError):
+        wl.add("ETH", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+
+
+def test_add_rejects_garbage_address() -> None:
+    wl = Whitelist()
+    import pytest  # noqa: PLC0415
+
+    with pytest.raises(WhitelistError):
+        wl.add("BTC", "not an address")
+
+
+def test_load_normalizes_chain_case(tmp_path: Path) -> None:
+    """Hand-edited ``"chain": "btc"`` must be treated as canonical BTC.
+
+    Without normalization the row keys to ``("btc", ...)`` while
+    detections key to ``("BTC", ...)`` so the entry would never match.
+    """
+    p = tmp_path / "whitelist.json"
+    payload = {
+        "entries": [
+            {
+                "chain": "btc",
+                "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+                "added_at": "2026-01-01T00:00:00+00:00",
+            },
+        ],
+    }
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    wl = Whitelist.load(p)
+    assert wl.contains("BTC", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+
+
+def test_load_drops_classifier_mismatches(tmp_path: Path, caplog) -> None:
+    """A hand-edited entry whose chain disagrees with the classifier is dropped.
+
+    Silently storing a useless row would leave the user thinking
+    their address is protected. The entry is removed, the rest of
+    the file is preserved, and a warning line is written so a user
+    who checks the diagnostic log sees what happened.
+    """
+    import logging  # noqa: PLC0415
+
+    p = tmp_path / "whitelist.json"
+    payload = {
+        "entries": [
+            # ETH address claimed as BTC - dropped on load
+            {
+                "chain": "BTC",
+                "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                "added_at": "2026-01-01T00:00:00+00:00",
+            },
+            # Valid pair - kept
+            {
+                "chain": "ETH",
+                "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                "added_at": "2026-01-02T00:00:00+00:00",
+            },
+        ],
+    }
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="clipwarden.whitelist"):
+        wl = Whitelist.load(p)
+    assert len(wl) == 1
+    assert wl.contains("ETH", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+    assert any("dropping invalid entry" in rec.message for rec in caplog.records)

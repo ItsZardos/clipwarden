@@ -63,10 +63,14 @@ def test_corrupt_file_is_backed_up(tmp_path: Path) -> None:
     p.write_text("{not valid json", encoding="utf-8")
     cfg = cfgmod.load(p)
     assert cfg == cfgmod.default_config()
-    # The corrupt file should have been moved aside.
+    # The corrupt file is moved aside and the primary path is
+    # re-persisted with defaults so downstream tooling can assume
+    # config.json exists.
     backups = list(tmp_path.glob("config.json.bak-*"))
     assert len(backups) == 1
-    assert not p.exists()
+    assert p.exists()
+    rehydrated = cfgmod.load(p)
+    assert rehydrated == cfgmod.default_config()
 
 
 def test_corrupt_file_backup_survives_rename_failure(
