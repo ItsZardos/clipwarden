@@ -7,7 +7,7 @@ emits :class:`DetectionEvent` instances. Subscribers (the app, the
 logger, the toast notifier) decide what to do with those events.
 
 Why pure:
-    * Testable without Windows or PyInstaller shenanigans.
+    * Testable without Windows or PyInstaller machinery.
     * Hypothesis can fuzz it at tens of thousands of cases per second.
     * Swap in a real :func:`classify` for production and a stub for tests.
     * The watcher can feed it synthetic events during CI.

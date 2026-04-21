@@ -3,8 +3,9 @@
 Scope is deliberately minimal: a user can mark a specific (chain,
 address) pair as trusted, and detections targeting that pair are logged
 as ``whitelisted_skip`` instead of surfaced as alerts. We do not offer
-"trust this entire chain" or "trust by prefix"; those are footguns that
-defeat the tool.
+"trust this entire chain" or "trust by prefix"; those are broad
+categories that would defeat the tool by whitelisting attacker-
+controlled addresses alongside the user's intended destination.
 
 ETH addresses are normalised to lowercase for lookup. EIP-55 mixed-case
 is cosmetic; the underlying destination is the same 20-byte value. The
