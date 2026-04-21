@@ -3,15 +3,11 @@
 Prints one line per artifact in a stable format suitable for pasting
 into a GitHub release body or storing next to the binaries::
 
-    ClipWarden-1.0.0.exe            SHA-256: <64-hex>
-    ClipWarden-Portable.exe         SHA-256: <64-hex>
-    ClipWarden-AttackerSim-1.0.0.exe  SHA-256: <64-hex>
+    ClipWarden-1.0.0.exe     SHA-256: <64-hex>
+    ClipWarden-Portable.exe  SHA-256: <64-hex>
 
-The attacker-sim artifact is optional: it is only included if
-``dist/`` contains the matching file (some release channels ship
-just the main app). The two ClipWarden artifacts are mandatory and a
-missing file is a hard failure so the packaging pipeline surfaces
-the omission loudly.
+Both artifacts are mandatory and a missing file is a hard failure so
+the packaging pipeline surfaces the omission loudly.
 
 No external dependencies. Hashing is streamed in 1 MiB chunks so the
 20+ MB one-file bootloader doesn't spike memory on a build agent.
@@ -74,23 +70,19 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     dist = root / "dist"
     version = _read_version()
-    required = [
+    targets = [
         dist / f"ClipWarden-{version}.exe",
         dist / "ClipWarden-Portable.exe",
     ]
-    optional = [
-        dist / f"ClipWarden-AttackerSim-{version}.exe",
-    ]
 
-    missing = [t for t in required if not t.is_file()]
+    missing = [t for t in targets if not t.is_file()]
     if missing:
         for m in missing:
             print(f"missing: {m}", file=sys.stderr)
         return 1
 
-    present = required + [t for t in optional if t.is_file()]
-    width = max(len(t.name) for t in present) + 2
-    for t in present:
+    width = max(len(t.name) for t in targets) + 2
+    for t in targets:
         print(f"{t.name.ljust(width)}SHA-256: {_sha256(t)}")
     return 0
 

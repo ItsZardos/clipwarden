@@ -87,6 +87,26 @@ package-data to include `*.ico`. Keep the top-level `assets/`
 folder for the PyInstaller spec and the icon generator; `tray.py`
 would pick whichever is present first.
 
+## 4. Self-demo mode for installed builds
+
+**Severity**: enhancement (v1.1 roadmap), not a bug.
+
+Reviewer demos currently require running the repository-local CLI
+simulator:
+`python tools/attacker_sim.py --i-know-this-is-adversarial`.
+That is fine for source users, but installed users cannot run a
+guided substitution demo without cloning the repo and setting up
+Python.
+
+**Repro**: install ClipWarden from release binaries only; there is no
+`ClipWarden.exe` flag to trigger an in-process demo substitution flow.
+
+**Fix sketch**: add a `--demo` flag to `ClipWarden.exe` that performs
+an explicit, gated, in-process substitution simulation against itself.
+Keep this inside the main binary (no separate packaged attacker
+artifact) so release distribution remains a clean single-artifact
+defensive story.
+
 ## Reporting a new issue
 
 If you hit something that is not on this list:

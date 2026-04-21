@@ -21,7 +21,6 @@ build/*
 !build/README.md
 !build/version_info.txt
 !build/ClipWarden.spec
-!build/attacker_sim.spec
 !build/installer.iss
 !build/launcher.py
 dist/
