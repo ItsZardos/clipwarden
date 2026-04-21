@@ -10,9 +10,10 @@ def test_version_is_set():
 
 
 def test_module_runs():
-    # Sanity check that `python -m clipwarden` actually launches.
+    # `python -m clipwarden --version` is the non-blocking smoke path;
+    # the bare invocation starts the watcher and blocks on Ctrl-C.
     result = subprocess.run(
-        [sys.executable, "-m", "clipwarden"],
+        [sys.executable, "-m", "clipwarden", "--version"],
         capture_output=True,
         text=True,
         timeout=10,

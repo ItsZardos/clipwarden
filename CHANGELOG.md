@@ -49,3 +49,42 @@ loosely. Dates are ISO.
 - Hypothesis property tests for the detector covering first-event,
   cross-chain, user-input-suppression, idempotency, monotonicity, and
   no-state-leak invariants.
+- Win32 clipboard watcher (`watcher.py`): message-only window on a
+  dedicated pump thread with `AddClipboardFormatListener`, worker
+  thread draining a bounded drop-oldest queue, seq-based self-write
+  suppression hook (`mark_self_write`) wired up ahead of the v1.1
+  "Restore previous address" action.
+- Windows toast notifier (`notifier.py`): thin `winotify` wrapper with
+  an `enabled` toggle, head/tail redaction of addresses in the toast
+  body, and best-effort failure handling so a broken toast stack never
+  kills the worker.
+- Autostart helper (`autostart.py`): idempotent enable/disable of the
+  per-user `HKCU\...\Run` key, no-op in dev (non-frozen) mode so
+  developers don't accidentally wire `python.exe` into boot.
+- Runtime composition (`runtime.py`): single `start()`/`stop()` surface
+  that assembles watcher + detector + logger + notifier, with
+  per-stage bounded shutdown timeouts so a wedge in any one component
+  can't hang exit. Translates `GetLastInputInfo` (tick-count frame)
+  into the monotonic frame the detector expects, guarded against the
+  ~49.7-day tick rollover by sampling both clocks per call.
+- `CLIPWARDEN_DEMO_MODE` env var disables the user-input suppression
+  gate for local smoke harnesses on interactive sessions. Never set
+  in a real deployment.
+- Headless entry point (`__main__.py`): `python -m clipwarden` starts
+  the runtime and blocks on Ctrl-C; `--version` prints the banner and
+  exits without touching the clipboard. `--tray` is reserved for the
+  forthcoming tray entry point.
+- `tools/attacker_sim.py`: CLI clipboard-hijack simulator that refuses
+  to run without `--i-know-this-is-adversarial`, prints a clear
+  warning explaining what the script does, and supports `--scenarios`
+  to exercise all four supported chains against a running ClipWarden.
+- `tools/smoke_pipeline.py`: in-process end-to-end smoke harness that
+  drives the real watcher/worker/detector/logger with tight timing
+  control, useful when external clipboard managers on the dev host
+  make subprocess-based smoke tests flaky.
+- Tests: 33 new unit / integration tests covering watcher lifecycle
+  and queue behaviour (13), notifier redaction and failure paths (7),
+  autostart registry operations against a fake winreg (7), and
+  runtime integration feeding substitution + whitelisted-skip +
+  cross-chain + user-input suppression + disabled-toast scenarios
+  through the full pipeline (6). 226 tests total.
