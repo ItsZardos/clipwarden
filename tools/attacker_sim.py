@@ -32,7 +32,27 @@ import win32clipboard
 import win32con
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-FIXTURES = REPO_ROOT / "tests" / "fixtures" / "real_addresses.json"
+
+
+def _fixtures_path() -> Path:
+    """Locate ``real_addresses.json`` in both source and frozen builds.
+
+    PyInstaller extracts bundled datas to ``sys._MEIPASS`` at runtime
+    and does not ship ``tests/`` in the release tree, so the source
+    layout path does not resolve. The attacker-sim spec bundles the
+    fixture under an ``attacker_sim_fixtures/`` prefix; look there
+    first, then fall back to the source checkout layout so the CLI
+    keeps working from ``tools/``.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "attacker_sim_fixtures" / "real_addresses.json"
+        if bundled.is_file():
+            return bundled
+    return REPO_ROOT / "tests" / "fixtures" / "real_addresses.json"
+
+
+FIXTURES = _fixtures_path()
 
 SAFETY_FLAG = "--i-know-this-is-adversarial"
 
@@ -78,7 +98,11 @@ class ChainPair:
 
 
 def _load_addresses_by_chain() -> dict[str, list[str]]:
-    data = json.loads(FIXTURES.read_text(encoding="utf-8"))
+    # Re-resolve the fixture path on each call so a frozen build that
+    # sets ``sys._MEIPASS`` after module import (the packaged GUI
+    # does its own ``sys.path`` shuffle at startup) and test doubles
+    # that monkeypatch the lookup both see the updated value.
+    data = json.loads(_fixtures_path().read_text(encoding="utf-8"))
     by_chain: dict[str, list[str]] = {}
     for e in data.get("entries", []):
         by_chain.setdefault(e["chain"], []).append(e["address"])
