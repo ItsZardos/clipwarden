@@ -36,6 +36,7 @@ from . import config as _config
 from . import logger as _logger
 from . import paths as _paths
 from . import whitelist as _whitelist
+from .alert import AlertDispatcher, AlertEvent
 from .classifier import Chain
 from .config import Config
 from .detector import Detector
@@ -130,6 +131,7 @@ class Runtime:
         detector: Detector,
         notifier: NotifierProtocol,
         logger: logging.Logger,
+        alert_dispatcher: AlertDispatcher | None = None,
         watcher_factory=Watcher,
     ) -> None:
         self._cfg = cfg
@@ -137,6 +139,12 @@ class Runtime:
         self._detector = detector
         self._notifier = notifier
         self._logger = logger
+        # The dispatcher is optional so legacy callers (and the
+        # ``notifications_enabled=False`` kill-switch path) still work.
+        # When absent, the runtime falls back to calling the notifier
+        # directly; this preserves the Phase A behaviour for any
+        # embedding that hasn't migrated to the multi-channel world.
+        self._alerts = alert_dispatcher
         self._watcher = watcher_factory(self._on_clipboard_event)
 
     def start(self) -> None:
@@ -173,11 +181,24 @@ class Runtime:
             log.exception("log_detection failed")
         if detection.whitelisted:
             return
-        if self._cfg.notifications_enabled:
-            try:
-                self._notifier.notify_substitution(detection)
-            except Exception:  # noqa: BLE001
-                log.exception("notify_substitution failed")
+        if not self._cfg.notifications_enabled:
+            # Legacy global kill-switch. If the user has turned off
+            # notifications entirely, honor that: skip every alert
+            # channel. The log entry above still fires so the audit
+            # trail is preserved.
+            return
+        if self._alerts is not None:
+            # Multi-channel dispatch. The dispatcher swallows per-
+            # channel exceptions internally, so a broken popup does
+            # not take down the toast.
+            self._alerts.dispatch(AlertEvent.from_detection(detection))
+            return
+        # No dispatcher wired: fall back to the direct toast call so
+        # the runtime still alerts in the Phase A composition.
+        try:
+            self._notifier.notify_substitution(detection)
+        except Exception:  # noqa: BLE001
+            log.exception("notify_substitution failed")
 
 
 def build_runtime(
@@ -185,6 +206,7 @@ def build_runtime(
     *,
     rt_paths: RuntimePaths | None = None,
     notifier: NotifierProtocol | None = None,
+    alert_dispatcher: AlertDispatcher | None = None,
 ) -> Runtime:
     """Assemble a :class:`Runtime` from disk-backed defaults.
 
@@ -192,6 +214,11 @@ def build_runtime(
     their canonical locations (see :mod:`clipwarden.paths`). Tests
     that need finer control should construct :class:`Runtime`
     directly.
+
+    Pass ``alert_dispatcher`` to hook into the multi-channel alert
+    system from :mod:`clipwarden.alert`; leaving it as ``None`` falls
+    back to the Phase A direct-to-notifier path so callers that
+    haven't migrated still get a working runtime.
     """
     rt_paths = rt_paths or RuntimePaths.resolve()
     cfg = cfg if cfg is not None else _config.load(rt_paths.config)
@@ -218,6 +245,7 @@ def build_runtime(
         detector=detector,
         notifier=notifier,
         logger=detection_logger,
+        alert_dispatcher=alert_dispatcher,
         # Resolved from module globals at call time so tests can swap
         # in a fake via monkeypatch.setattr(runtime, "Watcher", ...).
         watcher_factory=Watcher,

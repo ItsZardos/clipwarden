@@ -310,3 +310,148 @@ def test_build_runtime_honors_enabled_chains(tmp_appdata, frozen_last_input, mon
         rt.stop()
 
     assert rec.substitutions == []
+
+
+class _RecordingDispatcher:
+    """Stand-in for :class:clipwarden.alert.AlertDispatcher."""
+
+    def __init__(self) -> None:
+        self.dispatched: list = []
+
+    def dispatch(self, event) -> None:
+        self.dispatched.append(event)
+
+
+def _build_with_dispatcher(tmp_appdata, dispatcher, cfg=None):
+    rt_paths = RuntimePaths(
+        config=tmp_appdata / "config.json",
+        whitelist=tmp_appdata / "whitelist.json",
+        log=tmp_appdata / "log.jsonl",
+    )
+    captured: dict = {}
+
+    def factory(on_event):
+        w = _FakeWatcher(on_event)
+        captured["watcher"] = w
+        return w
+
+    rec = _RecordingNotifier()
+    from clipwarden.classifier import Chain  # noqa: PLC0415
+    from clipwarden.detector import Detector  # noqa: PLC0415
+    from clipwarden.logger import get_logger  # noqa: PLC0415
+    from clipwarden.whitelist import Whitelist  # noqa: PLC0415
+
+    cfg = cfg or Config()
+    wl = Whitelist()
+    enabled = frozenset(Chain(c) for c in cfg.enabled_chains if c in Chain.__members__)
+    rt = Runtime(
+        cfg=cfg,
+        rt_paths=rt_paths,
+        detector=Detector(
+            substitution_window_ms=cfg.substitution_window_ms,
+            is_whitelisted=wl.contains,
+            enabled_chains=enabled,
+        ),
+        notifier=rec,
+        logger=get_logger(rt_paths.log),
+        alert_dispatcher=dispatcher,
+        watcher_factory=factory,
+    )
+    return rt, captured["watcher"], rec, rt_paths.log
+
+
+def test_dispatcher_receives_alert_event_instead_of_notifier(tmp_appdata, frozen_last_input):
+    from clipwarden.alert import AlertEvent  # noqa: PLC0415
+
+    dispatcher = _RecordingDispatcher()
+    rt, watcher, rec, log_path = _build_with_dispatcher(tmp_appdata, dispatcher)
+    rt.start()
+    try:
+        watcher.emit(ClipboardEvent(text=BTC_A, ts_ms=1000, seq=1))
+        watcher.emit(ClipboardEvent(text=BTC_B, ts_ms=1200, seq=2))
+    finally:
+        _cleanup(rt)
+
+    assert len(dispatcher.dispatched) == 1
+    ev = dispatcher.dispatched[0]
+    assert isinstance(ev, AlertEvent)
+    assert ev.chain == "BTC"
+    assert ev.before == BTC_A
+    assert ev.after == BTC_B
+    # Notifier was NOT called directly when a dispatcher was wired;
+    # the toast path now goes through a ToastChannel inside the
+    # dispatcher rather than being invoked as a side-effect here.
+    assert rec.substitutions == []
+    assert len(_read_log_lines(log_path)) == 1
+
+
+def test_dispatcher_is_skipped_when_notifications_disabled(tmp_appdata, frozen_last_input):
+    dispatcher = _RecordingDispatcher()
+    rt, watcher, rec, log_path = _build_with_dispatcher(
+        tmp_appdata, dispatcher, cfg=Config(notifications_enabled=False)
+    )
+    rt.start()
+    try:
+        watcher.emit(ClipboardEvent(text=BTC_A, ts_ms=1000, seq=1))
+        watcher.emit(ClipboardEvent(text=BTC_B, ts_ms=1200, seq=2))
+    finally:
+        _cleanup(rt)
+
+    # Legacy kill-switch honored: no dispatch, no notifier, audit
+    # entry still written.
+    assert dispatcher.dispatched == []
+    assert rec.substitutions == []
+    assert len(_read_log_lines(log_path)) == 1
+
+
+def test_dispatcher_not_called_for_whitelisted_pair(tmp_appdata, frozen_last_input):
+    from clipwarden.classifier import Chain  # noqa: PLC0415
+    from clipwarden.detector import Detector  # noqa: PLC0415
+    from clipwarden.logger import get_logger  # noqa: PLC0415
+    from clipwarden.whitelist import Whitelist  # noqa: PLC0415
+
+    wl = Whitelist()
+    wl.add("BTC", BTC_B, note="test")
+    wl.save(tmp_appdata / "whitelist.json")
+
+    rt_paths = RuntimePaths(
+        config=tmp_appdata / "config.json",
+        whitelist=tmp_appdata / "whitelist.json",
+        log=tmp_appdata / "log.jsonl",
+    )
+    captured: dict = {}
+
+    def factory(on_event):
+        w = _FakeWatcher(on_event)
+        captured["watcher"] = w
+        return w
+
+    dispatcher = _RecordingDispatcher()
+    wl_loaded = Whitelist.load(rt_paths.whitelist)
+    enabled = frozenset(Chain(c) for c in Config().enabled_chains if c in Chain.__members__)
+    rt = Runtime(
+        cfg=Config(),
+        rt_paths=rt_paths,
+        detector=Detector(
+            substitution_window_ms=Config().substitution_window_ms,
+            is_whitelisted=wl_loaded.contains,
+            enabled_chains=enabled,
+        ),
+        notifier=_RecordingNotifier(),
+        logger=get_logger(rt_paths.log),
+        alert_dispatcher=dispatcher,
+        watcher_factory=factory,
+    )
+    watcher = captured["watcher"]
+
+    rt.start()
+    try:
+        watcher.emit(ClipboardEvent(text=BTC_A, ts_ms=1000, seq=1))
+        watcher.emit(ClipboardEvent(text=BTC_B, ts_ms=1200, seq=2))
+    finally:
+        _cleanup(rt)
+
+    assert dispatcher.dispatched == []
+    lines = _read_log_lines(rt_paths.log)
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "whitelisted_skip"
