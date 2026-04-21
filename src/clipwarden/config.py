@@ -82,7 +82,6 @@ class Config:
     enabled_chains: tuple[str, ...] = field(default=DEFAULT_CHAINS)
     substitution_window_ms: int = DEFAULT_SUBSTITUTION_WINDOW_MS
     user_input_grace_ms: int = DEFAULT_USER_INPUT_GRACE_MS
-    autostart: bool = False
     # Legacy v0 gate. Kept because existing config files on disk
     # still carry it; treated as a kill-switch: False disables every
     # alert channel regardless of the per-channel flags.
@@ -122,7 +121,6 @@ def _validate(data: dict[str, Any]) -> Config:
         "enabled_chains",
         "substitution_window_ms",
         "user_input_grace_ms",
-        "autostart",
         "notifications_enabled",
         "alert",
     }
@@ -152,10 +150,6 @@ def _validate(data: dict[str, Any]) -> Config:
     if not (MIN_GRACE_MS <= grace <= MAX_GRACE_MS):
         raise ConfigError(f"user_input_grace_ms out of range [{MIN_GRACE_MS}, {MAX_GRACE_MS}]")
 
-    autostart = data.get("autostart", False)
-    if not isinstance(autostart, bool):
-        raise ConfigError("autostart must be a boolean")
-
     notifs = data.get("notifications_enabled", True)
     if not isinstance(notifs, bool):
         raise ConfigError("notifications_enabled must be a boolean")
@@ -166,7 +160,6 @@ def _validate(data: dict[str, Any]) -> Config:
         enabled_chains=chains,
         substitution_window_ms=window,
         user_input_grace_ms=grace,
-        autostart=autostart,
         notifications_enabled=notifs,
         alert=alert,
     )
@@ -186,6 +179,8 @@ def load(path: Path) -> Config:
 
     Missing file -> defaults (silent; first-run behaviour).
     Bad JSON or schema -> file is renamed aside, defaults returned.
+    Legacy ``autostart`` key -> silently stripped and re-saved; see
+    :func:`_migrate_legacy_keys`.
     """
     if not path.exists():
         return default_config()
@@ -194,7 +189,16 @@ def load(path: Path) -> Config:
         data = json.loads(raw_text)
         if not isinstance(data, dict):
             raise ConfigError("config root must be an object")
-        return _validate(data)
+        migrated = _migrate_legacy_keys(data)
+        cfg = _validate(migrated)
+        # Rewrite the file once so future startups don't re-trigger
+        # the migration path. Rewrite is best-effort: if the disk is
+        # read-only we still return the validated config rather than
+        # refuse to start.
+        if migrated is not data:
+            with contextlib.suppress(OSError):
+                save(cfg, path)
+        return cfg
     except (OSError, json.JSONDecodeError, ConfigError):
         # If we cannot even rename the bad file, defaults are still the
         # safer outcome for a security tool; the user will notice on
@@ -202,6 +206,27 @@ def load(path: Path) -> Config:
         with contextlib.suppress(OSError):
             _backup_corrupt(path)
         return default_config()
+
+
+# Legacy keys that existed in a prior release but no longer do. We
+# silently drop them on load instead of refusing to start so upgrading
+# users are not greeted with a "config corrupt" backup-and-reset.
+_LEGACY_KEYS: frozenset[str] = frozenset({"autostart"})
+
+
+def _migrate_legacy_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Strip legacy keys from ``data`` and return the cleaned copy.
+
+    Returns the same object unchanged when no legacy key is present
+    so the caller can use ``is`` to detect whether a rewrite is
+    needed. autostart moved from config.json to an installer-managed
+    HKCU Run value; keeping the field here meant that two sources of
+    truth could disagree silently.
+    """
+    if not _LEGACY_KEYS.intersection(data):
+        return data
+    cleaned = {k: v for k, v in data.items() if k not in _LEGACY_KEYS}
+    return cleaned
 
 
 def save(cfg: Config, path: Path) -> None:

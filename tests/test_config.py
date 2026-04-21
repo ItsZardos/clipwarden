@@ -67,7 +67,6 @@ def test_corrupt_file_backup_survives_rename_failure(
         {"user_input_grace_ms": 100_000},
         {"user_input_grace_ms": "fast"},
         {"user_input_grace_ms": True},
-        {"autostart": "yes"},
         {"notifications_enabled": 1},
         {"totally_unknown_key": 42},
     ],
@@ -100,9 +99,66 @@ def test_save_uses_atomic_rename(tmp_path: Path) -> None:
 
 def test_with_changes_returns_new_instance() -> None:
     cfg = cfgmod.default_config()
-    other = cfg.with_changes(autostart=True)
-    assert cfg.autostart is False
-    assert other.autostart is True
+    other = cfg.with_changes(substitution_window_ms=1111)
+    assert cfg.substitution_window_ms == cfgmod.DEFAULT_SUBSTITUTION_WINDOW_MS
+    assert other.substitution_window_ms == 1111
+
+
+class TestAutostartMigration:
+    """One-shot migration: strip legacy ``autostart`` key on load."""
+
+    def test_legacy_autostart_key_is_dropped(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"autostart": True}), encoding="utf-8")
+
+        cfg = cfgmod.load(p)
+
+        assert cfg == cfgmod.default_config()
+        assert not hasattr(cfg, "autostart")
+
+    def test_migration_rewrites_file_without_autostart(self, tmp_path: Path) -> None:
+        # The cleaned config must be persisted so the next startup
+        # does not re-walk the migration path. Future unknown-key
+        # checks would then trip on autostart if we kept it.
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps({"autostart": False, "substitution_window_ms": 2500}),
+            encoding="utf-8",
+        )
+
+        cfgmod.load(p)
+
+        rewritten = json.loads(p.read_text(encoding="utf-8"))
+        assert "autostart" not in rewritten
+        assert rewritten["substitution_window_ms"] == 2500
+
+    def test_non_legacy_config_is_not_rewritten(self, tmp_path: Path) -> None:
+        # Sanity: a config file with no legacy keys must be left
+        # byte-for-byte alone. We pin this to keep the migration path
+        # cheap on the common case.
+        p = tmp_path / "config.json"
+        original = json.dumps({"substitution_window_ms": 1500}) + "\n"
+        p.write_text(original, encoding="utf-8")
+
+        before_mtime = p.stat().st_mtime_ns
+        cfgmod.load(p)
+        after_mtime = p.stat().st_mtime_ns
+
+        assert before_mtime == after_mtime
+        assert p.read_text(encoding="utf-8") == original
+
+    def test_autostart_invalid_value_still_migrates(self, tmp_path: Path) -> None:
+        # The validator used to refuse ``{"autostart": "yes"}``.
+        # Post-migration it must be silently stripped, not
+        # backed-up-as-corrupt: upgrading users with a weird legacy
+        # value should not see a surprise "config reset".
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"autostart": "yes"}), encoding="utf-8")
+
+        cfg = cfgmod.load(p)
+
+        assert cfg == cfgmod.default_config()
+        assert not list(tmp_path.glob("config.json.bak-*"))
 
 
 class TestAlertConfig:
