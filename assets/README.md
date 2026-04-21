@@ -2,6 +2,12 @@
 
 Static assets shipped with ClipWarden.
 
+## README
+
+- `icon-readme.png` - 128 px square PNG derived from `icon.ico` for
+  sharp rendering in `README.md` (display width 96 in the hero). Regenerate
+  with Pillow if you replace the tray icon set.
+
 ## Tray icons
 
 - `icon.ico` - tray icon for the normal (enabled) state

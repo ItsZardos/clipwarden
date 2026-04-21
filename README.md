@@ -1,15 +1,19 @@
-<p align="center"><img src="assets/icon.ico" alt="ClipWarden" width="80"/></p>
+<div align="center">
 
-# ClipWarden
+<img src="assets/icon-readme.png" alt="ClipWarden" width="96"/>
 
-<p align="center">
+<h1>ClipWarden</h1>
+
+<p>
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-blue" />
   <img alt="Platform Windows" src="https://img.shields.io/badge/Platform-Windows-lightgrey" />
   <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-green" />
   <img alt="Tests 371 passing" src="https://img.shields.io/badge/Tests-371%20passing-brightgreen" />
 </p>
 
-<p align="center"><img src="assets/demo.gif" alt="ClipWarden detecting a clipboard substitution" width="720"/></p>
+<p><img src="assets/demo.gif" alt="ClipWarden detecting a clipboard substitution" width="720"/></p>
+
+</div>
 
 A small Windows background tool that watches the clipboard for
 cryptocurrency addresses and fires an alert when something swaps the
