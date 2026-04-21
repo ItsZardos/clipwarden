@@ -18,14 +18,17 @@ env/
 
 # pyinstaller output
 build/*
+!build/README.md
 !build/version_info.txt
 !build/ClipWarden.spec
 !build/installer.iss
+!build/launcher.py
 dist/
 
 # local config / scratch
 .vscode/
 .idea/
+.cursor/
 *.log
 scratch/
 
