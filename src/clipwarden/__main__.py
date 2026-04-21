@@ -4,9 +4,9 @@ Modes:
 
 * default -- tray mode. Constructs the runtime, starts it, runs the
   pystray event loop. Quit from the tray cleanly stops the runtime.
-* ``--headless`` -- Phase A behavior. Starts the runtime, blocks on
-  Ctrl-C, stops cleanly. Retained for smoke testing and for running
-  on a headless CI host.
+* ``--headless`` -- no tray. Starts the runtime, blocks on Ctrl-C,
+  stops cleanly. Retained for smoke testing and for running on a
+  headless CI host.
 * ``--install-autostart`` / ``--uninstall-autostart`` -- invoked by
   the Inno Setup installer and uninstaller so the autostart codepath
   is centralised here and can be edited in one place in v1.1+. These

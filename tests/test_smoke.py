@@ -24,10 +24,10 @@ def test_module_runs():
 
 
 def test_headless_flag_is_accepted():
-    # Regression guard for the Phase B __main__ rewrite: --headless
-    # must still parse cleanly. Combining with --version exits before
-    # the runtime starts, which is enough to prove the flag is wired
-    # without hanging pytest on a real watcher loop.
+    # Regression guard: ``--headless`` must parse cleanly. Combining
+    # with ``--version`` exits before the runtime starts, which is
+    # enough to prove the flag is wired without hanging pytest on a
+    # real watcher loop.
     result = subprocess.run(
         [sys.executable, "-m", "clipwarden", "--headless", "--version"],
         capture_output=True,

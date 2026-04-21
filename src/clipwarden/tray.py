@@ -15,7 +15,7 @@ Design choices:
 * The state machine is deliberately thin: two booleans plus an
   optional timer handle. No external store, no file persistence of
   the "Enabled" or "Paused" bits -- on next launch the tray starts
-  enabled, matching Phase A's default.
+  enabled, matching the headless runtime's default.
 """
 
 from __future__ import annotations
@@ -441,9 +441,8 @@ class TrayApp:
         self._open(self._paths.log.parent)
 
     def _about_body(self) -> str:
-        # Exact wording locked in the Phase B plan. The first line is
-        # always "ClipWarden <version>" -- the product name is the
-        # brand, the descriptive subtitle sits on line 3.
+        # First line is always "ClipWarden <version>": the product
+        # name is the brand, the descriptive subtitle sits on line 3.
         return (
             f"ClipWarden {self._version}\n"
             "\n"

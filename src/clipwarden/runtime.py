@@ -165,8 +165,9 @@ class Runtime:
         # The dispatcher is optional so legacy callers (and the
         # ``notifications_enabled=False`` kill-switch path) still work.
         # When absent, the runtime falls back to calling the notifier
-        # directly; this preserves the Phase A behaviour for any
-        # embedding that hasn't migrated to the multi-channel world.
+        # directly, which keeps the single-channel embedding contract
+        # stable for callers that have not migrated to the multi-channel
+        # alert system.
         self._alerts = alert_dispatcher
         self._watcher = watcher_factory(self._on_clipboard_event)
 
@@ -231,7 +232,7 @@ class Runtime:
             self._alerts.dispatch(AlertEvent.from_detection(detection))
             return
         # No dispatcher wired: fall back to the direct toast call so
-        # the runtime still alerts in the Phase A composition.
+        # the runtime still alerts in the single-channel composition.
         try:
             self._notifier.notify_substitution(detection)
         except Exception:  # noqa: BLE001
@@ -254,8 +255,8 @@ def build_runtime(
 
     Pass ``alert_dispatcher`` to hook into the multi-channel alert
     system from :mod:`clipwarden.alert`; leaving it as ``None`` falls
-    back to the Phase A direct-to-notifier path so callers that
-    haven't migrated still get a working runtime.
+    back to the direct-to-notifier path so callers that haven't
+    migrated still get a working runtime.
     """
     rt_paths = rt_paths or RuntimePaths.resolve()
     cfg = cfg if cfg is not None else _config.load(rt_paths.config)
