@@ -1,5 +1,12 @@
 # ClipWarden
 
+<p align="center">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-blue" />
+  <img alt="Platform Windows" src="https://img.shields.io/badge/Platform-Windows-lightgrey" />
+  <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-green" />
+  <img alt="Tests 371 passing" src="https://img.shields.io/badge/Tests-371%20passing-brightgreen" />
+</p>
+
 <p align="center"><img src="assets/demo.gif" alt="ClipWarden detecting a clipboard substitution" width="720"/></p>
 
 A small Windows background tool that watches the clipboard for
