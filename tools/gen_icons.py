@@ -1,9 +1,10 @@
 """Generate the ClipWarden tray icons.
 
-Produces two multi-resolution .ico files under ``assets/``:
+Produces three multi-resolution .ico files under ``assets/``:
 
 * ``icon.ico``          - normal state, monochrome white
 * ``icon-disabled.ico`` - paused / disabled state, muted grey
+* ``icon-alert.ico``    - transient post-detection state, saturated red
 
 Each .ico contains 16, 32, 48, and 256 pixel entries, each rasterised at
 its native resolution rather than down-sampled from the 256 px image, so
@@ -46,6 +47,11 @@ NORMAL_COLOR: tuple[int, int, int, int] = (255, 255, 255, 255)
 # alpha would blend into the taskbar and read as "broken" rather than
 # "intentionally off".
 DISABLED_COLOR: tuple[int, int, int, int] = (140, 140, 140, 255)
+
+# Transient post-detection flash. Saturated red reads as "alert" at
+# 16 px against both light and dark taskbars; dropping saturation
+# muddies the signal on translucent Windows 11 tray backgrounds.
+ALERT_COLOR: tuple[int, int, int, int] = (220, 38, 38, 255)
 
 _TRANSPARENT: tuple[int, int, int, int] = (0, 0, 0, 0)
 
@@ -117,8 +123,10 @@ def _save_ico(path: Path, color: tuple[int, int, int, int]) -> None:
 def main() -> None:
     _save_ico(ASSETS_DIR / "icon.ico", NORMAL_COLOR)
     _save_ico(ASSETS_DIR / "icon-disabled.ico", DISABLED_COLOR)
+    _save_ico(ASSETS_DIR / "icon-alert.ico", ALERT_COLOR)
     print(f"wrote {ASSETS_DIR / 'icon.ico'}")
     print(f"wrote {ASSETS_DIR / 'icon-disabled.ico'}")
+    print(f"wrote {ASSETS_DIR / 'icon-alert.ico'}")
 
 
 if __name__ == "__main__":
