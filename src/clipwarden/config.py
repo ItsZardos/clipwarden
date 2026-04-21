@@ -177,13 +177,23 @@ def _backup_corrupt(path: Path) -> Path:
 def load(path: Path) -> Config:
     """Load config from disk, falling back to defaults.
 
-    Missing file -> defaults (silent; first-run behaviour).
+    Missing file -> defaults, and the defaults are immediately
+    persisted so the user has an editable file on disk to point to
+    from the Help/docs and so later tooling (migration on next
+    start, config-watching UX) can assume ``path`` exists.
     Bad JSON or schema -> file is renamed aside, defaults returned.
     Legacy ``autostart`` key -> silently stripped and re-saved; see
     :func:`_migrate_legacy_keys`.
     """
     if not path.exists():
-        return default_config()
+        cfg = default_config()
+        # Best-effort persist. A read-only profile or antivirus lock
+        # must not prevent startup; the in-memory defaults remain
+        # valid, the next successful save will create the file, and
+        # detection still runs in the meantime.
+        with contextlib.suppress(OSError):
+            save(cfg, path)
+        return cfg
     try:
         raw_text = path.read_text(encoding="utf-8")
         data = json.loads(raw_text)

@@ -92,7 +92,9 @@ class Whitelist:
     def load(cls, path: Path) -> Whitelist:
         """Load whitelist from disk, falling back to an empty whitelist.
 
-        Missing file -> empty whitelist (silent; first-run behaviour).
+        Missing file -> empty whitelist, and the empty state is
+        immediately persisted so the user has an editable file on
+        disk and later tooling can assume ``path`` exists.
         Bad JSON or shape -> file is renamed aside to
         ``<path>.bak-<ts>`` and an empty whitelist is returned. Within
         a file that parses, individual malformed entries are skipped
@@ -100,7 +102,14 @@ class Whitelist:
         shows the rest" UX contract.
         """
         if not path.exists():
-            return cls()
+            wl = cls()
+            # Best-effort persist. A read-only profile or antivirus
+            # lock must not prevent startup; in-memory state is still
+            # valid and the next Whitelist.save() will create the
+            # file.
+            with contextlib.suppress(OSError):
+                wl.save(path)
+            return wl
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):

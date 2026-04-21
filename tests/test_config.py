@@ -21,6 +21,35 @@ def test_missing_file_returns_default(tmp_path: Path) -> None:
     assert cfg == cfgmod.default_config()
 
 
+def test_missing_file_persists_defaults_to_disk(tmp_path: Path) -> None:
+    """First-run load should create the file so subsequent tooling can assume it.
+
+    A user-editable config file on disk is easier to point documentation
+    at than "run the app once, then your config will appear." The
+    in-memory defaults are returned either way; persistence is
+    strictly additive.
+    """
+    p = tmp_path / "config.json"
+    cfg = cfgmod.load(p)
+    assert cfg == cfgmod.default_config()
+    assert p.exists()
+    round_trip = cfgmod.load(p)
+    assert round_trip == cfg
+
+
+def test_missing_file_survives_persist_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only profile must not prevent startup, only skip the persist."""
+
+    def boom(*_a, **_kw):
+        raise OSError("simulated read-only profile")
+
+    monkeypatch.setattr(cfgmod, "save", boom)
+    cfg = cfgmod.load(tmp_path / "nope.json")
+    assert cfg == cfgmod.default_config()
+
+
 def test_partial_file_fills_defaults(tmp_path: Path) -> None:
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"substitution_window_ms": 2000}), encoding="utf-8")

@@ -85,6 +85,28 @@ def test_load_missing_file(tmp_path: Path) -> None:
     assert len(wl) == 0
 
 
+def test_load_missing_file_persists_empty_whitelist(tmp_path: Path) -> None:
+    """First-run load should create the file so subsequent tooling can assume it."""
+    p = tmp_path / "whitelist.json"
+    wl = Whitelist.load(p)
+    assert len(wl) == 0
+    assert p.exists()
+    round_trip = Whitelist.load(p)
+    assert len(round_trip) == 0
+
+
+def test_load_missing_file_survives_persist_failure(tmp_path, monkeypatch) -> None:
+    """A read-only profile must not prevent startup, only skip the persist."""
+    import clipwarden.whitelist as wlmod  # noqa: PLC0415
+
+    def boom(self, _path):
+        raise OSError("simulated read-only profile")
+
+    monkeypatch.setattr(wlmod.Whitelist, "save", boom)
+    wl = Whitelist.load(tmp_path / "nope.json")
+    assert len(wl) == 0
+
+
 def test_load_corrupt_json_returns_empty(tmp_path: Path) -> None:
     p = tmp_path / "whitelist.json"
     p.write_text("{not json", encoding="utf-8")
