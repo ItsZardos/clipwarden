@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import sys
 import threading
 import time
@@ -91,6 +92,7 @@ class TrayApp:
         icon_factory: Callable[..., Any] = pystray.Icon,
         message_box: Callable[..., int] = win32api.MessageBox,
         timer_factory: Callable[..., threading.Timer] = threading.Timer,
+        open_path: Callable[[str], Any] = os.startfile,
     ) -> None:
         self._runtime = runtime
         self._notifier = notifier
@@ -99,6 +101,7 @@ class TrayApp:
         self._icon_factory = icon_factory
         self._message_box = message_box
         self._timer_factory = timer_factory
+        self._open_path = open_path
 
         self._enabled: bool = True
         self._paused_until_ms: int | None = None
@@ -221,6 +224,35 @@ class TrayApp:
     def _on_resume_now(self, _icon: Any, _item: Any) -> None:
         self._resume()
 
+    def _open(self, target: Path) -> None:
+        """Shell-open a file or directory.
+
+        ``os.startfile`` raises on missing paths; we log and swallow
+        so a stale config or a freshly-uninstalled install dir does
+        not crash the tray loop. The failure is not silent to the
+        user forever -- the About dialog surfaces the same paths for
+        manual inspection.
+        """
+        try:
+            self._open_path(str(target))
+        except OSError:
+            log.warning("tray failed to open %s", target, exc_info=True)
+
+    def _on_open_config(self, _icon: Any, _item: Any) -> None:
+        self._open(self._paths.config)
+
+    def _on_open_log_folder(self, _icon: Any, _item: Any) -> None:
+        # log.jsonl lives directly in %APPDATA%\ClipWarden, so the
+        # folder is its parent.
+        self._open(self._paths.log.parent)
+
+    def _on_open_history_folder(self, _icon: Any, _item: Any) -> None:
+        # "History" is a user-facing alias for the same directory
+        # that holds log.jsonl. The two menu items are kept distinct
+        # because users searching for "history" shouldn't have to
+        # know the operations term "log folder".
+        self._open(self._paths.log.parent)
+
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem(
@@ -242,6 +274,10 @@ class TrayApp:
                     ),
                 ),
             ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Open Config", self._on_open_config),
+            pystray.MenuItem("Open Log Folder", self._on_open_log_folder),
+            pystray.MenuItem("Open History Folder", self._on_open_history_folder),
         )
 
     def run(self) -> None:
