@@ -281,6 +281,48 @@ def test_disabled_chain_produces_no_alert_end_to_end(tmp_appdata, frozen_last_in
     assert _read_log_lines(log_path) == []
 
 
+def test_build_runtime_raises_on_unknown_chain(tmp_appdata, monkeypatch):
+    """An unreviewed enabled_chains entry must fail loudly at startup.
+
+    Config validation rejects unknown chain tokens, so any unknown at
+    build_runtime time means an upstream contract was violated. The
+    historical behavior silently dropped the unknown chain; raising
+    surfaces the misconfiguration immediately instead of leaving a
+    runtime that pretends the chain was enabled.
+    """
+    monkeypatch.setattr(
+        rt_module, "Watcher", lambda on_event: _FakeWatcher(on_event), raising=True
+    )
+    # Config is a frozen dataclass but not self-validating; direct
+    # construction bypasses _validate which only runs in load().
+    cfg = Config(enabled_chains=("BTC", "DOGE"))
+
+    with pytest.raises(ValueError, match="DOGE"):
+        rt_module.build_runtime(cfg=cfg)
+
+
+def test_demo_mode_ignored_when_frozen(monkeypatch):
+    """A frozen build must refuse to honor CLIPWARDEN_DEMO_MODE.
+
+    The flag is a dev-only override; if it leaked into an installer
+    build via inherited environment, the user-activity gate would be
+    silently disabled on the end-user's machine. The frozen check
+    defends against that even with the env var set.
+    """
+    import sys as _sys  # noqa: PLC0415
+
+    monkeypatch.setenv("CLIPWARDEN_DEMO_MODE", "1")
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    assert rt_module._demo_mode_enabled() is False
+
+    monkeypatch.delattr(_sys, "frozen", raising=False)
+    monkeypatch.setattr(_sys, "_MEIPASS", "/tmp/fake-meipass", raising=False)
+    assert rt_module._demo_mode_enabled() is False
+
+    monkeypatch.delattr(_sys, "_MEIPASS", raising=False)
+    assert rt_module._demo_mode_enabled() is True
+
+
 def test_build_runtime_honors_enabled_chains(tmp_appdata, frozen_last_input, monkeypatch):
     # The factory path (the one the real app uses) must thread
     # enabled_chains from disk through to the detector. If someone

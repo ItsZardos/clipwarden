@@ -39,6 +39,35 @@ def test_classify_strips_whitespace():
     assert result.chain is Chain.ETH
 
 
+@pytest.mark.parametrize(
+    "invisible",
+    [
+        "\u200b",  # zero width space
+        "\u200c",  # zero width non-joiner
+        "\u200d",  # zero width joiner
+        "\u2060",  # word joiner
+        "\u202e",  # right-to-left override
+        "\u2066",  # left-to-right isolate
+        "\ufeff",  # BOM
+        "\u00ad",  # soft hyphen
+    ],
+)
+def test_classify_strips_invisible_unicode(invisible):
+    """Invisible / formatting-only code points must not defeat the shape regex.
+
+    A hostile clipboard writer could otherwise embed zero-width or
+    bidi control characters inside an otherwise-valid address so the
+    ASCII shape regex sees a non-match while the wallet UI renders
+    the string as though the characters were not present.
+    """
+    address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    poisoned = address[:4] + invisible + address[4:]
+    result = classify(poisoned)
+    assert result is not None, f"failed to classify with {invisible!r}"
+    assert result.chain is Chain.ETH
+    assert result.address == address
+
+
 def test_real_fixtures_classify_correctly(real_addresses):
     for entry in real_addresses["entries"]:
         result = classify(entry["address"])

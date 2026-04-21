@@ -27,6 +27,7 @@ import contextlib
 import ctypes
 import logging
 import os
+import sys
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -50,7 +51,8 @@ log = logging.getLogger(__name__)
 # "user activity since previous copy suppresses this detection" gate.
 # Intended for local smoke harnesses where the operator's own mouse
 # and keyboard activity would otherwise be indistinguishable from a
-# deliberate recopy. Never set this in production.
+# deliberate recopy. Refused in frozen builds so the flag cannot leak
+# into shipped binaries via environment-variable inheritance.
 _DEMO_MODE_ENV = "CLIPWARDEN_DEMO_MODE"
 
 
@@ -71,6 +73,26 @@ _GetTickCount.argtypes = []
 _GetTickCount.restype = wintypes.DWORD
 
 
+def _demo_mode_enabled() -> bool:
+    """Return True when the development demo-mode override is in effect.
+
+    The flag is honored in source runs (``python -m clipwarden`` from a
+    checkout) so the smoke harness can suppress the user-input gate.
+    Frozen builds (PyInstaller ``sys.frozen`` or ``sys._MEIPASS``) ignore
+    the flag regardless of the environment variable so an accidentally
+    inherited ``CLIPWARDEN_DEMO_MODE=1`` cannot reach end users.
+    """
+    if not os.environ.get(_DEMO_MODE_ENV):
+        return False
+    if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS"):
+        log.warning(
+            "CLIPWARDEN_DEMO_MODE set in a frozen build; ignoring. "
+            "This override is source-run only."
+        )
+        return False
+    return True
+
+
 def last_input_ts_ms() -> int:
     """Return the user's last-input timestamp in the monotonic frame.
 
@@ -81,13 +103,14 @@ def last_input_ts_ms() -> int:
     monotonic frame the detector expects. Recomputing the offset per
     call avoids needing a persistent rollover correction.
 
-    When :data:`_DEMO_MODE_ENV` is set, or when ``GetLastInputInfo``
-    fails, the function returns a very negative value so the
-    detector's ``last_input_ts_ms > prev_ts`` check evaluates to
-    False. This matches the security posture of preferring to alert
-    rather than suppress when input tracking is unavailable.
+    When :func:`_demo_mode_enabled` is true, or when
+    ``GetLastInputInfo`` fails, the function returns a very negative
+    value so the detector's ``last_input_ts_ms > prev_ts`` check
+    evaluates to False. This matches the security posture of
+    preferring to alert rather than suppress when input tracking is
+    unavailable.
     """
-    if os.environ.get(_DEMO_MODE_ENV):
+    if _demo_mode_enabled():
         return -(2**62)
     info = _LASTINPUTINFO()
     info.cbSize = ctypes.sizeof(_LASTINPUTINFO)
@@ -239,12 +262,16 @@ def build_runtime(
 
     wl = _whitelist.Whitelist.load(rt_paths.whitelist)
     # Translate the config's string chain list into the Chain enum set
-    # the classifier understands. Unknown strings fall through because
-    # config validation already rejects them, but we filter defensively
-    # so an unreviewed cfg path never silently enables a new chain.
-    enabled_chains: frozenset[Chain] = frozenset(
-        Chain(c) for c in cfg.enabled_chains if c in Chain.__members__
-    )
+    # the classifier understands. Config validation already rejects
+    # unknown strings, so any unknown at this point means an upstream
+    # contract was violated; raise loudly instead of silently dropping
+    # so a misconfigured embedding fails at startup, not at runtime.
+    unknown = [c for c in cfg.enabled_chains if c not in Chain.__members__]
+    if unknown:
+        raise ValueError(
+            f"enabled_chains contains unsupported entries: {sorted(unknown)}"
+        )
+    enabled_chains: frozenset[Chain] = frozenset(Chain(c) for c in cfg.enabled_chains)
     detector = Detector(
         substitution_window_ms=cfg.substitution_window_ms,
         is_whitelisted=wl.contains,
