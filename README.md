@@ -1,5 +1,7 @@
 # ClipWarden
 
+<p align="center"><img src="assets/demo.gif" alt="ClipWarden detecting a clipboard substitution" width="720"/></p>
+
 A small Windows background tool that watches the clipboard for
 cryptocurrency addresses and fires an alert when something swaps the
 address out between copy and paste. It targets "clipper" malware:
