@@ -240,10 +240,11 @@ def _configure_diagnostic_logging(level: str) -> None:
         # Idempotency check runs BEFORE we construct a new handler,
         # because the RotatingFileHandler constructor opens the file
         # immediately. A discarded-after-creation handler would leak
-        # a file descriptor on every repeat call.
+        # a file descriptor on every repeat call. The marker attribute
+        # is a private identity flag so an unrelated rotating handler
+        # ending in the same filename tail cannot confuse the check.
         already_attached = any(
-            isinstance(h, logging.handlers.RotatingFileHandler)
-            and getattr(h, "baseFilename", "").endswith(_DIAGNOSTIC_LOG_NAME)
+            getattr(h, "_clipwarden_diagnostic_handler", False)
             for h in root.handlers
         )
         appdata = _paths.appdata_dir()
@@ -255,6 +256,7 @@ def _configure_diagnostic_logging(level: str) -> None:
                 backupCount=_DIAGNOSTIC_BACKUP_COUNT,
                 encoding="utf-8",
             )
+            handler._clipwarden_diagnostic_handler = True  # type: ignore[attr-defined]
             handler.setLevel(level)
             handler.setFormatter(
                 logging.Formatter(

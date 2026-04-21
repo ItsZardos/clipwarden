@@ -557,3 +557,65 @@ class TestTrayFlash:
         app._on_quit(None, None)
         assert flash_timer.cancelled is True
         assert app._flashing is False
+
+    def test_flash_timeout_after_tray_teardown_is_noop(self, app, timers):
+        """A racing flash timer that fires after Quit must not touch state.
+
+        Quit cancels the flash timer, but the timer thread can already
+        be inside the callback when cancel() arrives. Guarding on
+        ``_icon is None`` keeps the callback side-effect-free so the
+        shutdown path stays deterministic.
+        """
+        app.run()
+        app.flash(5.0)
+        flash_timer = timers[-1]
+        # Simulate teardown between cancel and the callback's wakeup.
+        app._icon = None
+        flash_timer.fire()
+        assert app._flashing is False
+        assert app._flash_timer is None
+
+
+class TestImageLoading:
+    """Asset loader must degrade gracefully and cache resolved images.
+
+    A missing or unreadable .ico would otherwise crash the tray before
+    the menu ever renders, leaving the user with a stopped service and
+    no indication why. The placeholder keeps the process alive and the
+    cache avoids re-decoding the same file on every flash.
+    """
+
+    def _clear_caches(self) -> None:
+        tray._image_cache.clear()
+        tray._PLACEHOLDER_IMAGE = None
+
+    def test_missing_asset_returns_placeholder(self, monkeypatch, tmp_path):
+        self._clear_caches()
+        missing = tmp_path / "does-not-exist.ico"
+        monkeypatch.setattr(tray, "_resolve_asset", lambda _name: missing)
+
+        image = tray._load_image("icon.ico")
+
+        assert image.size == (16, 16)
+        assert image.mode == "RGBA"
+
+    def test_load_image_caches_result(self, monkeypatch, tmp_path):
+        self._clear_caches()
+        missing = tmp_path / "does-not-exist.ico"
+        resolved: list[str] = []
+
+        def fake_resolve(name: str):
+            resolved.append(name)
+            return missing
+
+        monkeypatch.setattr(tray, "_resolve_asset", fake_resolve)
+
+        first = tray._load_image("icon.ico")
+        second = tray._load_image("icon.ico")
+
+        assert first is second
+        assert resolved == ["icon.ico"]
+
+    def test_placeholder_is_singleton(self):
+        self._clear_caches()
+        assert tray._placeholder_image() is tray._placeholder_image()

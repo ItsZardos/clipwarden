@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,11 @@ LOGGER_NAME = "clipwarden.detections"
 MAX_BYTES = 10 * 1024 * 1024
 BACKUP_COUNT = 3
 
+# Dedicated diagnostic logger. Rotation failures, unwritable
+# filesystems, and close() exceptions are routed here so --noconsole
+# builds still surface them; stderr would be swallowed by pythonw.
+_diag_log = logging.getLogger("clipwarden.diagnostic")
+
 
 class _RawJsonlFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -53,9 +59,35 @@ class _RawJsonlFormatter(logging.Formatter):
         return record.getMessage()
 
 
+class _DiagnosticRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler that routes failures to the diagnostic log.
+
+    The stdlib default writes to ``sys.stderr``, which is silent in a
+    ``--noconsole`` PyInstaller build. Surfacing the record via the
+    clipwarden diagnostic logger lets the user see "log write failed
+    because disk full / file locked" without having to attach a
+    debugger.
+    """
+
+    def handleError(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+        try:
+            _diag_log.exception(
+                "detection log write failed for %s", self.baseFilename
+            )
+        except Exception:  # noqa: BLE001
+            # Last-resort fall back to the stdlib behavior so the
+            # failure is not entirely silent even if the diagnostic
+            # handler itself is broken.
+            super().handleError(record)
+
+
+def _paths_match(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
 def _find_handler(logger: logging.Logger, resolved: str) -> RotatingFileHandler | None:
     for h in logger.handlers:
-        if isinstance(h, RotatingFileHandler) and h.baseFilename == resolved:
+        if isinstance(h, RotatingFileHandler) and _paths_match(h.baseFilename, resolved):
             return h
     return None
 
@@ -81,15 +113,19 @@ def get_logger(
     if existing is not None:
         return logger
 
-    # Remove any prior handler pointing somewhere else before adding the
-    # new one. Otherwise get_logger on a new path would duplicate writes.
+    # Remove any prior handler pointing somewhere else before adding
+    # the new one. Flush first so buffered records reach disk; without
+    # this a rapid get_logger(p1) -> get_logger(p2) could lose the
+    # records still in p1's buffer.
     for h in list(logger.handlers):
         if isinstance(h, RotatingFileHandler):
+            with contextlib.suppress(Exception):
+                h.flush()
             logger.removeHandler(h)
             h.close()
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
+    handler = _DiagnosticRotatingFileHandler(
         filename=str(path),
         maxBytes=max_bytes,
         backupCount=backup_count,
@@ -106,12 +142,16 @@ def close_logger() -> None:
     Windows file locks don't linger; production calls it on shutdown."""
     logger = logging.getLogger(LOGGER_NAME)
     for h in list(logger.handlers):
-        logger.removeHandler(h)
-        # Close is best-effort: a handler refusing to close is about to
-        # be garbage-collected anyway and we would rather shut down
-        # cleanly than propagate an obscure stdlib exception.
         with contextlib.suppress(Exception):
+            h.flush()
+        logger.removeHandler(h)
+        try:
             h.close()
+        except Exception:
+            # Surface the failure through the diagnostic logger so a
+            # --noconsole build still leaves evidence; we still swallow
+            # because shutdown must not be blocked on handler misbehavior.
+            _diag_log.exception("close_logger: handler %r refused to close", h)
 
 
 def _to_payload(event: DetectionEvent) -> dict[str, Any]:

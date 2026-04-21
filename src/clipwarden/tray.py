@@ -140,10 +140,40 @@ def _resolve_asset(name: str) -> Path:
     return Path(__file__).resolve().parent.parent.parent / "assets" / name
 
 
+_PLACEHOLDER_IMAGE: Image.Image | None = None
+_image_cache: dict[str, Image.Image] = {}
+
+
+def _placeholder_image() -> Image.Image:
+    """Return a 16x16 neutral-grey placeholder used when an .ico is absent.
+
+    The tray must come up even if the assets directory was trimmed or
+    the icon build step was skipped; a missing .ico would otherwise
+    crash ``_DpiAwareIcon`` before the menu could ever register. The
+    placeholder is visually distinct enough that a packager sees it
+    in the tray and knows to rebuild assets.
+    """
+    global _PLACEHOLDER_IMAGE
+    if _PLACEHOLDER_IMAGE is None:
+        _PLACEHOLDER_IMAGE = Image.new("RGBA", (16, 16), (128, 128, 128, 255))
+    return _PLACEHOLDER_IMAGE
+
+
 def _load_image(name: str) -> Image.Image:
+    cached = _image_cache.get(name)
+    if cached is not None:
+        return cached
     path = _resolve_asset(name)
-    with Image.open(path) as im:
-        return im.copy()
+    try:
+        with Image.open(path) as im:
+            image = im.copy()
+    except (FileNotFoundError, OSError):
+        log.warning(
+            "tray asset missing: %s; falling back to placeholder icon", path
+        )
+        image = _placeholder_image()
+    _image_cache[name] = image
+    return image
 
 
 class TrayApp:
@@ -352,6 +382,14 @@ class TrayApp:
         timer.start()
 
     def _on_flash_timeout(self) -> None:
+        # The flash timer can fire after the tray has been torn down
+        # (Quit cancels the timer, but a race between fire and cancel
+        # is possible); refusing to mutate when the icon is gone keeps
+        # the callback side-effect-free during shutdown.
+        if self._icon is None:
+            self._flash_timer = None
+            self._flashing = False
+            return
         self._flash_timer = None
         self._flashing = False
         self._refresh_icon()
@@ -508,4 +546,11 @@ class TrayApp:
             _TRAY_TITLE,
             self._build_menu(),
         )
-        self._icon.run()
+        try:
+            self._icon.run()
+        except Exception:  # noqa: BLE001
+            # A pystray backend failure (missing notification area,
+            # broken Explorer) must not crash the process: runtime
+            # teardown still needs to happen. Log and return so
+            # __main__'s cleanup path runs normally.
+            log.exception("tray pystray run loop raised; exiting tray")

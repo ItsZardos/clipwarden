@@ -113,3 +113,50 @@ def test_jsonl_output_is_one_line_per_event(tmp_path: Path) -> None:
     assert len(lines) == 5
     for line in lines:
         json.loads(line)
+
+
+def test_get_logger_is_idempotent_with_casefolded_paths(tmp_path: Path) -> None:
+    """Windows paths differing only in case must not produce duplicate handlers.
+
+    Without normalising via ``os.path.normcase``, a call with
+    ``C:\\Users\\...\\log.jsonl`` and ``c:\\users\\...\\log.jsonl``
+    would attach a second handler and duplicate every write.
+    """
+    path_lower = tmp_path / "log.jsonl"
+    logger = lg.get_logger(path_lower)
+    # Same absolute path, lookup by a different case. On non-Windows
+    # normcase is a no-op so the assertion still holds via the
+    # straight equality path.
+    same_again = lg.get_logger(Path(str(path_lower).swapcase()))
+    handlers = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+    assert logger is same_again
+    assert len(handlers) == 1
+
+
+def test_rotation_error_goes_to_diagnostic_logger(tmp_path, caplog) -> None:
+    """A handler-level write failure surfaces through clipwarden.diagnostic.
+
+    stderr is swallowed in --noconsole builds, so the custom handler
+    routes handleError through the diagnostic logger instead. Callers
+    (packagers, ops) can then see a "log write failed" line in
+    diagnostic.log without running the binary under a debugger.
+    """
+    import logging  # noqa: PLC0415
+
+    path = tmp_path / "log.jsonl"
+    logger = lg.get_logger(path)
+    handler = next(
+        h for h in logger.handlers if isinstance(h, RotatingFileHandler)
+    )
+    with caplog.at_level(logging.ERROR, logger="clipwarden.diagnostic"):
+        try:
+            try:
+                raise OSError("simulated disk full")
+            except OSError:
+                handler.handleError(logging.makeLogRecord({"msg": "bad write"}))
+        finally:
+            lg.close_logger()
+
+    assert any(
+        "detection log write failed" in rec.message for rec in caplog.records
+    )
