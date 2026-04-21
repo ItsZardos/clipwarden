@@ -6,6 +6,37 @@ loosely. Dates are ISO.
 
 ## [Unreleased]
 
+### Changed - release artifact naming
+- Release artifacts renamed for clarity on the GitHub Releases page.
+  Installer is now `ClipWarden-<version>.exe` (was
+  `ClipWarden-Setup-<version>.exe`); portable is
+  `ClipWarden-Portable.exe` (was `ClipWarden.exe`). The *installed*
+  binary is still `%LOCALAPPDATA%\Programs\ClipWarden\ClipWarden.exe`
+  so autostart Run-key entries, shortcuts, and the PE
+  `OriginalFilename` resource are unchanged. PyInstaller's spec now
+  emits `ClipWarden-Portable.exe` directly and the Inno Setup script
+  renames it on copy via `DestName=ClipWarden.exe`, so no post-build
+  rename step is required.
+
+### Added - attacker-sim GUI (optional release artifact)
+- New `tools/attacker_sim_gui.py`: Tk GUI wrapping the existing
+  clipboard-hijack simulator. Chain selector, BEFORE/AFTER preview
+  populated from the fixture corpus, adjustable substitution delay,
+  "I understand this touches my real clipboard" checkbox that gates
+  the fire button, and a scrolling log panel. Designed for reviewer
+  smoke tests and demo videos on machines without Python installed.
+- New `build/attacker_sim.spec`: PyInstaller onefile spec that
+  bundles `tests/fixtures/real_addresses.json` and the alert icon,
+  produces `dist/ClipWarden-AttackerSim-<version>.exe`. The frozen
+  GUI goes through the same `_ACKNOWLEDGED`-gated clipboard write
+  path as the CLI, so the safety flag cannot be bypassed via the
+  packaged GUI any more than it can from the CLI.
+- `tools/gen_checksums.py` picks up the attacker-sim artifact
+  opportunistically: if present in `dist/` its SHA-256 is emitted
+  alongside the required installer and portable lines, otherwise it
+  is silently skipped. A missing installer or portable is still a
+  hard failure.
+
 ### Changed - post-v1.0.0 hardening pass
 - Watcher shutdown now releases the `_stop_handle` Win32 event on a
   clean stop and reallocates it on the next `start()`, closing a

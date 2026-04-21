@@ -1,12 +1,16 @@
-# PyInstaller spec for the ClipWarden onefile exe.
+# PyInstaller spec for the ClipWarden portable onefile exe.
 #
 # Invocation (from the repo root):
 #
 #     pyinstaller build/ClipWarden.spec --clean --noconfirm
 #
-# Output: dist/ClipWarden.exe. UPX is off on purpose: SmartScreen and
-# several AV products flag UPX-packed binaries as suspicious and the
-# size win is not worth the support burden.
+# Output: dist/ClipWarden-Portable.exe. The installer (installer.iss)
+# consumes this artifact and copies it to the install directory as
+# ``ClipWarden.exe`` so the installed binary keeps the canonical
+# process name used by autostart and the PE version resource.
+# UPX is off on purpose: SmartScreen and several AV products flag
+# UPX-packed binaries as suspicious and the size win is not worth the
+# support burden.
 #
 # Icons are bundled under an ``assets/`` folder inside the onefile
 # payload; :func:`clipwarden.tray._resolve_asset` probes ``_MEIPASS``
@@ -83,7 +87,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="ClipWarden",
+    name="ClipWarden-Portable",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -55,7 +55,7 @@ def test_read_version_rejects_non_string_literal(tmp_path, monkeypatch):
 
     Release CI runs this script as the authoritative version source;
     silently coercing ``__version__ = get_version()`` to an empty
-    string would produce a ``ClipWarden-Setup-.exe`` artifact name.
+    string would produce a ``ClipWarden-.exe`` artifact name.
     """
     fake_here = _write_init(
         tmp_path,

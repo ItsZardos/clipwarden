@@ -66,21 +66,21 @@ It does not:
 
 Two shipped options. Pick one.
 
-1. **Installer** (recommended). Download
-   `ClipWarden-Setup-1.0.0.exe` from the GitHub Releases page and run
-   it. Per-user, no admin required. It installs the binary under
+1. **Installer** (recommended). Download `ClipWarden-1.0.0.exe` from
+   the GitHub Releases page and run it. Per-user, no admin required.
+   It installs the binary as `ClipWarden.exe` under
    `%LOCALAPPDATA%\Programs\ClipWarden\`, creates a Start Menu entry,
    and offers an optional "Start with Windows" checkbox (unchecked by
    default).
-2. **Portable**. Download `ClipWarden.exe` from the same Releases
-   page. No install - double-click to launch.
+2. **Portable**. Download `ClipWarden-Portable.exe` from the same
+   Releases page. No install - double-click to launch.
 
 Both artifacts have SHA-256 checksums published alongside the
 release. Verify them:
 
 ```powershell
-Get-FileHash .\ClipWarden-Setup-1.0.0.exe -Algorithm SHA256
-Get-FileHash .\ClipWarden.exe -Algorithm SHA256
+Get-FileHash .\ClipWarden-1.0.0.exe -Algorithm SHA256
+Get-FileHash .\ClipWarden-Portable.exe -Algorithm SHA256
 ```
 
 The binaries are not code-signed in v1.0.0, so Windows SmartScreen may

@@ -23,7 +23,7 @@ PrivilegesRequired=lowest
 DisableDirPage=yes
 DisableProgramGroupPage=no
 OutputDir=..\dist
-OutputBaseFilename=ClipWarden-Setup-{#MyAppVersion}
+OutputBaseFilename=ClipWarden-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -39,7 +39,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "autostart"; Description: "Start ClipWarden automatically when Windows starts"; GroupDescription: "Optional:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; PyInstaller produces ClipWarden-Portable.exe (the portable release
+; artifact). The installer copies it to {app}\ClipWarden.exe so the
+; installed binary keeps the canonical process name referenced by the
+; autostart Run key, the PE OriginalFilename resource, and the Start
+; Menu shortcut.
+Source: "..\dist\ClipWarden-Portable.exe"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
