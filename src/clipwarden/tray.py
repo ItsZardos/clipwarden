@@ -283,6 +283,27 @@ class TrayApp:
         except Exception:  # noqa: BLE001
             log.warning("About MessageBox failed", exc_info=True)
 
+    def _on_quit(self, _icon: Any, _item: Any) -> None:
+        """Tear down the runtime then signal the tray loop to exit.
+
+        The outer ``__main__`` also calls ``runtime.stop()`` after
+        ``tray.run()`` returns; stopping here first means the log
+        handler is closed before ``pystray`` begins its own teardown,
+        which keeps the shutdown trace tidy. ``Runtime.stop`` is
+        idempotent so the second call is harmless.
+        """
+        self._clear_pause(cancel_timer=True)
+        try:
+            self._runtime.stop()
+        except Exception:  # noqa: BLE001
+            log.exception("runtime.stop failed during tray Quit")
+        self._enabled = False
+        if self._icon is not None:
+            try:
+                self._icon.stop()
+            except Exception:  # noqa: BLE001
+                log.warning("icon.stop raised during Quit", exc_info=True)
+
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem(
@@ -310,6 +331,7 @@ class TrayApp:
             pystray.MenuItem("Open History Folder", self._on_open_history_folder),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("About ClipWarden", self._on_about),
+            pystray.MenuItem("Quit ClipWarden", self._on_quit),
         )
 
     def run(self) -> None:
