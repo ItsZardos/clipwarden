@@ -11,7 +11,6 @@ def test_version_is_set():
 
 def test_module_runs():
     # Sanity check that `python -m clipwarden` actually launches.
-
     result = subprocess.run(
         [sys.executable, "-m", "clipwarden"],
         capture_output=True,

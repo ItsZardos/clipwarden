@@ -1,0 +1,105 @@
+# False-positive corpus for ClipWarden classifier
+#
+# Every non-blank, non-comment line in this file MUST classify as None.
+# A regression here means something non-address is being treated as an
+# address. Given the threat model (arming a detector that will later
+# warn on substitution), an FP here is worse than a missed classify:
+# it turns the tool into noise.
+#
+# Categories are grouped together rather than alphabetised so the next
+# reader can tell what each block is testing at a glance.
+#
+# The synthetic adversarial entries at the bottom are produced by
+# tools/gen_fixtures.py and pasted in. Re-run the generator if you
+# want to refresh them; the seed is fixed so the output is stable.
+
+# GIT SHAs (real, from my other repos)
+04c3614c5dbe345edb7bd22df1ac46b93e08154b
+a403106e1db52509bdc98779aab08bd626839867
+490f00a67ace14a6a1ff528f677ffcdf5e8a2b0d
+1752df4015d34d36f163edbaec8422701c1ef974
+5dfef352e5b033ea90bc79c4f121c7db5f12ee1c
+b48483735d621f4f507d517bd0ff14848b645205
+7bba1407ed2c7e5000117a507590f36a122024f6
+530a741828dd9891b9a2609eca2d1c1bd26f383e
+b9aaf0c32fea6f3c9d5fb0c09aba920a0ac49256
+88c9fce7c2f894e7757faa0df567ad843e16f59e
+04c3614
+a403106
+490f00a
+
+# GITHUB TOKENS (synthetic, shape-correct)
+ghp_1io4LpTYTyvsSBK3gSJcD2uhrnQ7OPFT5bXp
+gho_N8Kt1MaLws0adY6SbQLFm2sAnqKcp1fXQgoa
+ghu_vD9KMO90NO0kCedkANrpfl6ZAKD2MM0n2N6c
+ghs_SlSGHaGLAcaAH7Zmhry0qj7ewvyNCVPTR4of
+ghr_7s9wjKYOLjObNf2PxvYGVasRZxURcba3ULEV
+ghp_HTcOxFBCdALsBB0ogbzW7oa0goqjNuDiSk57
+ghs_T7yRpB1XHCo0HAf6r3KZ9ERYGpzZSCXEGBY9
+ghu_Rzox5akHtt2LJOSQCV3wX0ZWACdF25G5dJ64
+
+# AWS TOKENS (synthetic, shape-correct)
+AKIA65EGTKY5UWWG5KSO
+AKIAQ343KGLUXXO2QS2J
+ASIATVT2EXBYN62CRFFQ
+
+# STRIPE TOKENS (synthetic, deliberately broken so push-protection
+# scanners don't mistake them for real keys; the classifier only cares
+# that these aren't crypto addresses, which still holds.)
+sk_fake_ISUqgFvGkbfI2pfRfrx6tfPD
+pk_fake_G67Vggasc5VM4yO1K9NGHBMt
+sk_fake_8vU2sFxyvYBS0yo2QOqHtkhi
+pk_fake_MRHRswfdMYo61iDAOb9JkfjD
+
+# JWT FRAGMENTS (synthetic, shape-correct)
+zQvN3NyDy3HVf232YVCbh02QHMreyZ_39x5mdgj0FeU.Hyu0BB1SoMQSBPJMQb1euVsfoytQdRaXeWX94nCnOgcLDfolF8oFd5XBJFs91rUT7Xk0APsxj4QIFRVjlPDNhGH1_ePOW3svydu47daZxZi-EXvtvr6hAmIyzfNlinky.VJXz2BN1o8xOx0Hk7ptZZ92KkI4b7DJ4TiixekMF8z6zSiJmQFRchQVxPPeDOQts
+6OdODJU0BciJts51OaNJaOP5ea1kv-E-lgGceooxHNNsufdfqn9oaNVyKKYg-myDUPFIIeF0qYMEeGqhdWC-S78mSlGEDqcXjCzimv75blmkxuJDvgGF4_8jMm44xbpTnaPwaxFHkkRtPmEv-EVaZ1sUHFanU56l
+
+# UUID v4 (synthetic)
+a23405cd-ca16-4841-92c8-c1a8f9e817bd
+382ca8e3-e9e4-468d-af15-66060e5802b3
+09602783-5cc8-4bda-ad48-6360c8496013
+59746dfd-7ec0-4587-a250-b529f7e8f802
+6e797ce0-9353-49df-be21-606a34cfdd65
+e6793d8f-f8e5-4c5b-8ae7-4d4888c5eeeb
+
+# RANDOM HEX (synthetic)
+742f2be98483b1379efeba6b6b4feabd
+305922955bc6ff19c42af8a73836d34e2be22b81
+320a3495f42028c6840397c3f784770627f14cbf85020574b1587443aed31f33
+a10b0a4dfa83fcb53867e1ae661c7ab4b4a4f4cf21e4ea7a791142282e8bb9c7dc1c3f86d5ce615383f03c35cf26575e73e30d1e7030e30acba2fba0d721bf20
+0xe16ebd79c06a80720409975a71990fe3
+
+# BASE64 BLOBS (synthetic)
+bMG7m45UQ4NU7184qPXxAziYGWv5bIcs
+5q2c1e4P9By0TzdMhJtiqihRmWQFETkMRk1rwjHHR22+
+mrv0S+ReFaPfkNKDYE24Se+wI2Ln9iTEs+GHmoGGeS2MmRYm1Wpo7QhXH1M9BIiX
+XcLXMT4wGkbfn7RNdgeLeIru7AY18DJjhDxsRnM6m7A6/NRGF/Hj2LDa//8K769wP5xMFwmBhpqGsOkhtfaVHUim
+
+# LONG SLUGS / DIGESTS (synthetic)
+staging-tier-internal-shard-canary-release
+release-v2-staging-alpha-service-shard
+east-staging-tier-canary-release-alpha
+@scope/service-beta-prod-staging-v1.2.3
+sha256:7212d07d6b07e352adbe0d8576dd8e418ced8ee4003684de9be4c04cb23b47b1
+
+# BTC BASE58 CHECKSUM-MUTATED (adversarial)
+1BvBMSEYBtWetqTFn5Au4m4GFg7xJaNVN2
+3J98t1WpEZ73CNmQviecrnyiWrnqRhWNXy
+
+# BTC BECH32/BECH32M CHECKSUM-MUTATED (adversarial)
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7k08f3t4
+bc1p0xlxvlhemja6c4dqv23uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0
+
+# ETH EIP-55 CASE-MUTATED (adversarial)
+0x5aAeb6053F3E94C9b9A09f33669435E7Ef1beAed
+0xfB6916095ca1df60bB79Ce92cE3Ea74C37c5d359
+0xd8DA6BF26964aF9D7eEd9e03E53415D37aA96045
+
+# SOL OFF-CURVE (adversarial)
+EyvXpnwHbzGpVqK11kUwdJYpwo2iFdLkuDy4yQ8emjXW
+FMSYwF7EA8NYU9WdxfGNGr7exapxufdBN92gEN74dwE7
+
+# XMR WRONG NETWORK / CHECKSUM-MUTATED (adversarial)
+44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDt4Gv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A
+44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGWBEP3A

@@ -1,9 +1,9 @@
 # ClipWarden
 
 A small Windows background tool that watches the clipboard for cryptocurrency
-addresses and fires an alert when something  swaps the address out between copy and paste.
-It targets "clipper" malware: software that silently replaces a copied crypto 
-address with the attacker's address before the victim pastes.
+addresses and fires an alert when something swaps the address out between copy
+and paste. It targets "clipper" malware: software that silently replaces a
+copied crypto address with the attacker's address before the victim pastes.
 
 
 Supported right now: Bitcoin, Ethereum (and any EVM chain that shares the ETH

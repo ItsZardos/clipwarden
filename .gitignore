@@ -18,7 +18,7 @@ env/
 # pyinstaller output
 build/*
 !build/version_info.txt
-!build/clipboard_monitor.spec
+!build/ClipWarden.spec
 !build/installer.iss
 dist/
 

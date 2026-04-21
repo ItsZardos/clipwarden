@@ -85,6 +85,9 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["clipwarden"]
 branch = true
+# __main__ is the CLI stub covered by a subprocess smoke test; coverage
+# does not see it because that test shells out.
+omit = ["src/clipwarden/__main__.py"]
 
 [tool.coverage.report]
 exclude_also = [
