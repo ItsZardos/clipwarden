@@ -26,12 +26,18 @@ ASSETS = REPO_ROOT / "assets"
 block_cipher = None
 
 a = Analysis(
-    [str(REPO_ROOT / "src" / "clipwarden" / "__main__.py")],
+    # Use the launcher shim as the frozen entry point. PyInstaller's
+    # bootloader runs the entry script with ``__package__`` unset,
+    # which breaks relative imports in ``clipwarden.__main__``. The
+    # shim does ``from clipwarden.__main__ import main`` so the
+    # frozen exe and ``python -m clipwarden`` share one code path.
+    [str(SPEC_DIR / "launcher.py")],
     pathex=[str(REPO_ROOT / "src")],
     binaries=[],
     datas=[
         (str(ASSETS / "icon.ico"), "assets"),
         (str(ASSETS / "icon-disabled.ico"), "assets"),
+        (str(ASSETS / "icon-alert.ico"), "assets"),
     ],
     hiddenimports=[
         # pystray's backend is picked at import time via a
@@ -41,6 +47,22 @@ a = Analysis(
         # transitively through some image format plugins; safer to
         # declare than to chase a production-only ImportError.
         "PIL._tkinter_finder",
+        # PyNaCl (via clipwarden.validators.solana) imports cffi
+        # through C-ext indirection that PyInstaller's static
+        # analysis misses on this platform; without these the frozen
+        # exe raises ModuleNotFoundError: _cffi_backend at import
+        # time before main() can run.
+        "_cffi_backend",
+        "cffi",
+        # The alert popup uses Tkinter. PyInstaller usually discovers
+        # tkinter automatically, but being explicit guards against a
+        # transitive import path that a future refactor might break
+        # (lazy import inside alert.PopupChannel._show). Including
+        # ``winsound`` is cheap and matches the "one channel, one
+        # declared dep" convention.
+        "tkinter",
+        "tkinter.ttk",
+        "winsound",
     ],
     hookspath=[],
     hooksconfig={},
