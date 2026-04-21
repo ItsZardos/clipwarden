@@ -24,7 +24,9 @@ first-party writes (a future "Restore previous address" action, for
 example) to avoid tripping the detector. After writing, call
 :meth:`Watcher.mark_self_write` with the sequence number the write
 produced; the next ``WM_CLIPBOARDUPDATE`` carrying that number is
-dropped on the pump thread before it reaches the queue.
+dropped on the pump thread before it reaches the queue. The token is
+guarded by an internal lock so ``mark_self_write`` is safe to call
+from any thread.
 
 The current release never writes to the clipboard. The suppression
 hook is part of the watcher's public contract and is documented here
@@ -194,6 +196,9 @@ class Watcher:
         self._worker_thread: threading.Thread | None = None
         self._pump_tid: int = 0
         self._stop_handle = win32event.CreateEvent(None, True, False, None)
+        # Protects ``_self_write_seq`` so ``mark_self_write`` can be
+        # called from any thread without racing the pump's consume.
+        self._lock = threading.Lock()
         self._self_write_seq: int | None = None
         self._running = False
         self._dropped_count = 0
@@ -225,7 +230,8 @@ class Watcher:
 
     @property
     def self_write_seq(self) -> int | None:
-        return self._self_write_seq
+        with self._lock:
+            return self._self_write_seq
 
     def mark_self_write(self, next_seq: int) -> None:
         """Arm self-write suppression for the given clipboard sequence.
@@ -239,7 +245,8 @@ class Watcher:
         """
         if next_seq < 0:
             raise ValueError("sequence numbers are non-negative")
-        self._self_write_seq = next_seq
+        with self._lock:
+            self._self_write_seq = next_seq
 
     def start(self, *, timeout: float = _DEFAULT_START_TIMEOUT_S) -> None:
         """Start the pump and worker threads, blocking until ready.
@@ -264,6 +271,10 @@ class Watcher:
                 "Clipboard watcher is still stopping from a previous session; "
                 "restart ClipWarden to recover"
             )
+        if self._stop_handle is None:
+            # A prior clean stop freed the event handle; reallocate so
+            # this start has a fresh signal to the pump loop.
+            self._stop_handle = win32event.CreateEvent(None, True, False, None)
         self._ready.clear()
         self._start_error = None
         self._running = True
@@ -292,19 +303,27 @@ class Watcher:
         # Tear down the half-started pump and worker so the caller's
         # retry on a fresh Watcher starts from a clean baseline.
         self._running = False
-        win32event.SetEvent(self._stop_handle)
+        if self._stop_handle is not None:
+            win32event.SetEvent(self._stop_handle)
         if self._pump_tid:
             with contextlib.suppress(pywintypes.error):
                 win32gui.PostThreadMessage(self._pump_tid, WM_WAKE, 0, 0)
-        with contextlib.suppress(Exception):
-            self._queue.put_nowait(None)
+        # Join the pump first so it cannot enqueue another event
+        # behind the poison pill, then drain the worker.
         if self._pump_thread is not None:
             self._pump_thread.join(timeout=1.0)
+        with contextlib.suppress(Exception):
+            self._queue.put_nowait(None)
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=1.0)
+        pump_alive = self._pump_thread is not None and self._pump_thread.is_alive()
+        worker_alive = self._worker_thread is not None and self._worker_thread.is_alive()
         self._pump_thread = None
         self._worker_thread = None
         self._pump_tid = 0
+        self._wnd_proc_ref = None
+        if not (pump_alive or worker_alive):
+            self._release_stop_handle()
         if isinstance(err, WatcherStartError):
             raise err
         raise WatcherStartError(str(err) or type(err).__name__) from err
@@ -320,7 +339,8 @@ class Watcher:
         if not self._running:
             return
         self._running = False
-        win32event.SetEvent(self._stop_handle)
+        if self._stop_handle is not None:
+            win32event.SetEvent(self._stop_handle)
         if self._pump_tid:
             with contextlib.suppress(pywintypes.error):
                 win32gui.PostThreadMessage(self._pump_tid, WM_WAKE, 0, 0)
@@ -343,7 +363,9 @@ class Watcher:
             # a graceful process exit can still reason about them.
             # Mark the watcher as permanently stopping; start() will
             # refuse, which is strictly safer than overlapping a
-            # new listener registration with a stale one.
+            # new listener registration with a stale one. The pump
+            # may still own _stop_handle so leave it allocated; the
+            # OS reclaims it on process exit.
             log.warning(
                 "Watcher stop timed out (pump_alive=%s worker_alive=%s); "
                 "refusing further start() calls on this instance",
@@ -355,6 +377,28 @@ class Watcher:
         self._pump_thread = None
         self._worker_thread = None
         self._pump_tid = 0
+        self._wnd_proc_ref = None
+        self._release_stop_handle()
+
+    def _release_stop_handle(self) -> None:
+        """Close the stop event handle if it is still open.
+
+        Safe to call more than once. The handle is reallocated on the
+        next ``start()`` so a watcher instance can be restarted after
+        a clean stop.
+        """
+        if self._stop_handle is None:
+            return
+        handle, self._stop_handle = self._stop_handle, None
+        with contextlib.suppress(pywintypes.error, OSError):
+            win32api.CloseHandle(handle)
+
+    def __del__(self) -> None:
+        # Defensive: if the caller forgot to stop() this instance, at
+        # least release the Win32 event handle instead of leaking it
+        # until process exit.
+        with contextlib.suppress(Exception):
+            self._release_stop_handle()
 
     def _pump_run(self) -> None:
         self._pump_tid = win32api.GetCurrentThreadId()
@@ -457,9 +501,10 @@ class Watcher:
             log.debug("GetClipboardSequenceNumber failed; treating as seq=0")
             seq = 0
 
-        if self._self_write_seq is not None and seq == self._self_write_seq:
-            self._self_write_seq = None
-            return
+        with self._lock:
+            if self._self_write_seq is not None and seq == self._self_write_seq:
+                self._self_write_seq = None
+                return
 
         text = read_clipboard_text()
         ev = ClipboardEvent(text=text, ts_ms=monotonic_ms(), seq=seq)

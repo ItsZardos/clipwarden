@@ -334,6 +334,87 @@ def test_start_raises_on_handshake_timeout():
 # --- Stop-timeout guard ---------------------------------------------------
 
 
+def test_stop_releases_stop_handle():
+    """A clean stop closes the Win32 event handle instead of leaking it.
+
+    Leaking one handle per watcher instance is harmless in a single
+    process, but it makes lifetime ownership ambiguous. Close on the
+    happy path; reallocate on the next start.
+    """
+    wx, _ = _make_watcher()
+    with (
+        patch.object(w, "_add_clipboard_listener", lambda hwnd: None),
+        patch.object(w, "_remove_clipboard_listener", lambda hwnd: None),
+    ):
+        wx.start()
+        assert wx._stop_handle is not None
+        wx.stop(timeout=2.0)
+        assert wx._stop_handle is None
+        # A second start must reallocate the handle and complete
+        # cleanly so the watcher is restartable after a graceful stop.
+        wx.start()
+        assert wx._stop_handle is not None
+        wx.stop(timeout=2.0)
+        assert wx._stop_handle is None
+
+
+def test_stop_handle_retained_on_stuck_pump():
+    """If the pump cannot join, the stop handle stays allocated.
+
+    Releasing a handle the pump thread may still wait on would crash
+    the stranded pump rather than leak; keeping it alive is the
+    defensive default.
+    """
+    stuck = threading.Event()
+
+    wx, _ = _make_watcher()
+
+    def never_exit():
+        stuck.wait(timeout=10.0)
+
+    wx._running = True
+    wx._pump_thread = threading.Thread(target=never_exit, daemon=True)
+    wx._worker_thread = threading.Thread(target=never_exit, daemon=True)
+    wx._pump_thread.start()
+    wx._worker_thread.start()
+    try:
+        wx.stop(timeout=0.1)
+        assert wx._stopping is True
+        assert wx._stop_handle is not None
+    finally:
+        stuck.set()
+        if wx._pump_thread is not None:
+            wx._pump_thread.join(timeout=1.0)
+        if wx._worker_thread is not None:
+            wx._worker_thread.join(timeout=1.0)
+
+
+def test_mark_self_write_is_thread_safe():
+    """Concurrent mark_self_write callers must not lose writes.
+
+    The clipboard pump thread reads ``_self_write_seq`` while arbitrary
+    callers may arm it; a shared lock keeps the compare-and-clear
+    atomic relative to other writers.
+    """
+    wx, _ = _make_watcher()
+    errors: list[BaseException] = []
+
+    def hammer(start: int) -> None:
+        try:
+            for i in range(200):
+                wx.mark_self_write(start + i)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer, args=(i * 1000,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=2.0)
+    assert not errors
+    assert wx.self_write_seq is not None
+
+
 def test_stop_timeout_marks_watcher_stopping_and_blocks_restart():
     """If a background thread outlives stop's join, start() must refuse.
 
