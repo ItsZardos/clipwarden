@@ -39,9 +39,42 @@ MAX_WINDOW_MS = 10_000
 MIN_GRACE_MS = 0
 MAX_GRACE_MS = 10_000
 
+_ALERT_KEYS: frozenset[str] = frozenset({"popup", "toast", "sound", "tray_flash"})
+
 
 class ConfigError(ValueError):
     """Raised when a config file is present but malformed."""
+
+
+@dataclass(frozen=True)
+class AlertConfig:
+    """Multi-channel alert configuration.
+
+    Each field gates one alert channel. All default True because a
+    clipper attack costs real money in seconds and the right default
+    for a security tool is "every channel on, power users can opt
+    out." See :mod:`clipwarden.alert` for the channels themselves.
+
+    Channel semantics:
+
+    * ``popup`` -- custom topmost Tk window. Bypasses Focus Assist /
+      Do Not Disturb because the OS treats it as a user window, not a
+      shell notification. This is the primary channel.
+    * ``toast`` -- Windows shell toast via ``winotify``. Respects
+      Focus Assist, so it is a secondary channel that power users can
+      disable without losing detection visibility.
+    * ``sound`` -- ``winsound.MessageBeep(MB_ICONEXCLAMATION)`` when
+      the popup fires. Skipped in headless mode only because the
+      popup itself is skipped there.
+    * ``tray_flash`` -- tray icon swaps to the alert variant for a
+      few seconds after a detection, providing passive awareness if
+      the user isn't at the screen.
+    """
+
+    popup: bool = True
+    toast: bool = True
+    sound: bool = True
+    tray_flash: bool = True
 
 
 @dataclass(frozen=True)
@@ -50,7 +83,11 @@ class Config:
     substitution_window_ms: int = DEFAULT_SUBSTITUTION_WINDOW_MS
     user_input_grace_ms: int = DEFAULT_USER_INPUT_GRACE_MS
     autostart: bool = False
+    # Legacy v0 gate. Kept because existing config files on disk
+    # still carry it; treated as a kill-switch: False disables every
+    # alert channel regardless of the per-channel flags.
     notifications_enabled: bool = True
+    alert: AlertConfig = field(default_factory=AlertConfig)
 
     def with_changes(self, **kwargs: Any) -> Config:
         return replace(self, **kwargs)
@@ -60,6 +97,26 @@ def default_config() -> Config:
     return Config()
 
 
+def _validate_alert(raw: Any) -> AlertConfig:
+    if raw is None:
+        return AlertConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("alert must be an object")
+    extra = set(raw) - _ALERT_KEYS
+    if extra:
+        raise ConfigError(f"unknown alert keys: {sorted(extra)}")
+    for key in _ALERT_KEYS:
+        if key in raw and not isinstance(raw[key], bool):
+            raise ConfigError(f"alert.{key} must be a boolean")
+    defaults = AlertConfig()
+    return AlertConfig(
+        popup=raw.get("popup", defaults.popup),
+        toast=raw.get("toast", defaults.toast),
+        sound=raw.get("sound", defaults.sound),
+        tray_flash=raw.get("tray_flash", defaults.tray_flash),
+    )
+
+
 def _validate(data: dict[str, Any]) -> Config:
     known = {
         "enabled_chains",
@@ -67,6 +124,7 @@ def _validate(data: dict[str, Any]) -> Config:
         "user_input_grace_ms",
         "autostart",
         "notifications_enabled",
+        "alert",
     }
     extra = set(data) - known
     if extra:
@@ -102,12 +160,15 @@ def _validate(data: dict[str, Any]) -> Config:
     if not isinstance(notifs, bool):
         raise ConfigError("notifications_enabled must be a boolean")
 
+    alert = _validate_alert(data.get("alert"))
+
     return Config(
         enabled_chains=chains,
         substitution_window_ms=window,
         user_input_grace_ms=grace,
         autostart=autostart,
         notifications_enabled=notifs,
+        alert=alert,
     )
 
 
@@ -147,6 +208,9 @@ def save(cfg: Config, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(cfg)
     payload["enabled_chains"] = list(payload["enabled_chains"])
+    # ``asdict`` already flattens the nested AlertConfig into a dict;
+    # nothing extra to do here, but keeping a comment so future
+    # readers don't add a redundant ``payload["alert"] = ...`` line.
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)

@@ -103,3 +103,92 @@ def test_with_changes_returns_new_instance() -> None:
     other = cfg.with_changes(autostart=True)
     assert cfg.autostart is False
     assert other.autostart is True
+
+
+class TestAlertConfig:
+    def test_default_has_all_channels_on(self) -> None:
+        cfg = cfgmod.default_config()
+        assert cfg.alert.popup is True
+        assert cfg.alert.toast is True
+        assert cfg.alert.sound is True
+        assert cfg.alert.tray_flash is True
+
+    def test_missing_alert_section_uses_defaults(self, tmp_path: Path) -> None:
+        # Legacy v0 config files on disk have no alert block; they
+        # must still load cleanly without triggering the corrupt-file
+        # backup path.
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps({"substitution_window_ms": 2000}),
+            encoding="utf-8",
+        )
+        cfg = cfgmod.load(p)
+        assert cfg.alert == cfgmod.AlertConfig()
+        assert not list(tmp_path.glob("config.json.bak-*"))
+
+    def test_partial_alert_section_fills_defaults(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps({"alert": {"toast": False}}),
+            encoding="utf-8",
+        )
+        cfg = cfgmod.load(p)
+        assert cfg.alert.toast is False
+        assert cfg.alert.popup is True
+        assert cfg.alert.sound is True
+        assert cfg.alert.tray_flash is True
+
+    def test_all_channels_off_is_accepted(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "alert": {
+                        "popup": False,
+                        "toast": False,
+                        "sound": False,
+                        "tray_flash": False,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        cfg = cfgmod.load(p)
+        assert cfg.alert.popup is False
+        assert cfg.alert.toast is False
+        assert cfg.alert.sound is False
+        assert cfg.alert.tray_flash is False
+
+    @pytest.mark.parametrize(
+        "bad_alert",
+        [
+            "yes",
+            123,
+            ["popup"],
+            {"popup": "true"},
+            {"popup": 1},
+            {"unknown_channel": True},
+            {"popup": True, "extra": False},
+        ],
+    )
+    def test_invalid_alert_block_is_backed_up(self, tmp_path: Path, bad_alert) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"alert": bad_alert}), encoding="utf-8")
+        cfg = cfgmod.load(p)
+        assert cfg == cfgmod.default_config()
+        assert list(tmp_path.glob("config.json.bak-*"))
+
+    def test_round_trip_preserves_alert_block(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        cfg = cfgmod.default_config().with_changes(
+            alert=cfgmod.AlertConfig(popup=True, toast=False, sound=True, tray_flash=False)
+        )
+        cfgmod.save(cfg, p)
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        assert raw["alert"] == {
+            "popup": True,
+            "toast": False,
+            "sound": True,
+            "tray_flash": False,
+        }
+        assert cfgmod.load(p) == cfg
