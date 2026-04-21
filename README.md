@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.ico" alt="ClipWarden" width="80"/></p>
+
 # ClipWarden
 
 <p align="center">
