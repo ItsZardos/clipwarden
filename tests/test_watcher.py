@@ -329,3 +329,49 @@ def test_start_raises_on_handshake_timeout():
     ):
         wx.start(timeout=0.2)
     stuck.set()
+
+
+# --- Stop-timeout guard ---------------------------------------------------
+
+
+def test_stop_timeout_marks_watcher_stopping_and_blocks_restart():
+    """If a background thread outlives stop's join, start() must refuse.
+
+    A fake pump/worker pair that never exits would normally be
+    dropped silently from stop() and a follow-up start() would spawn
+    a second pair racing the first for the clipboard listener. That
+    is strictly worse than failing the restart, so a timed-out stop
+    latches the watcher into a permanent "stopping" state.
+    """
+    stuck = threading.Event()  # never set
+
+    wx, _ = _make_watcher()
+
+    def never_exit():
+        stuck.wait(timeout=10.0)
+
+    # Manually install threads that refuse to exit so we can observe
+    # stop()'s timeout path without running the real pump.
+    wx._running = True
+    wx._pump_thread = threading.Thread(target=never_exit, daemon=True)
+    wx._worker_thread = threading.Thread(target=never_exit, daemon=True)
+    wx._pump_thread.start()
+    wx._worker_thread.start()
+    try:
+        wx.stop(timeout=0.1)
+        assert wx._stopping is True
+        # Refs are preserved so a caller can still observe the stuck
+        # threads for diagnostics; they would otherwise be
+        # unreferenceable after stop returned.
+        assert wx._pump_thread is not None
+        assert wx._worker_thread is not None
+        # A follow-up start must refuse rather than spawn a second
+        # listener pair that would race the stranded one.
+        with pytest.raises(WatcherStartError):
+            wx.start(timeout=0.1)
+    finally:
+        stuck.set()
+        if wx._pump_thread is not None:
+            wx._pump_thread.join(timeout=1.0)
+        if wx._worker_thread is not None:
+            wx._worker_thread.join(timeout=1.0)

@@ -205,6 +205,11 @@ class Watcher:
         # initialisation exception back across the thread boundary.
         self._ready = threading.Event()
         self._start_error: BaseException | None = None
+        # Sticky "previous stop() could not join" flag. Set when one
+        # of the background threads outlived its join timeout so a
+        # subsequent start() cannot spawn a second pair that would
+        # compete with the first for the HWND and event queue.
+        self._stopping = False
         # Win32 requires a strong reference to the WndProc callable for
         # the lifetime of the window; without it the closure is GC'd
         # and the next dispatched message causes an access violation.
@@ -248,6 +253,17 @@ class Watcher:
         """
         if self._running:
             return
+        if self._stopping:
+            # A previous stop() could not join one of the background
+            # threads. Spawning a fresh pump/worker pair now would
+            # race the stranded pair for the clipboard listener slot
+            # and the event queue, so refuse the start and let the
+            # caller surface the failure (typically via crash.log and
+            # a MessageBox) instead.
+            raise WatcherStartError(
+                "Clipboard watcher is still stopping from a previous session; "
+                "restart ClipWarden to recover"
+            )
         self._ready.clear()
         self._start_error = None
         self._running = True
@@ -320,6 +336,22 @@ class Watcher:
             self._queue.put_nowait(None)
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=timeout)
+        pump_alive = self._pump_thread is not None and self._pump_thread.is_alive()
+        worker_alive = self._worker_thread is not None and self._worker_thread.is_alive()
+        if pump_alive or worker_alive:
+            # Keep the thread refs so a future debugging session or
+            # a graceful process exit can still reason about them.
+            # Mark the watcher as permanently stopping; start() will
+            # refuse, which is strictly safer than overlapping a
+            # new listener registration with a stale one.
+            log.warning(
+                "Watcher stop timed out (pump_alive=%s worker_alive=%s); "
+                "refusing further start() calls on this instance",
+                pump_alive,
+                worker_alive,
+            )
+            self._stopping = True
+            return
         self._pump_thread = None
         self._worker_thread = None
         self._pump_tid = 0
