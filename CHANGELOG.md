@@ -6,7 +6,114 @@ loosely. Dates are ISO.
 
 ## [Unreleased]
 
-### Added
+### Added - Phase B (tray UI + packaging)
+- System-tray app (`tray.py`) built on `pystray` with `Enable`,
+  three-option `Pause` submenu (15 min / 1 hour / Until I resume)
+  with auto-resume timer, `Open Config` / `Open Log Folder` /
+  `Open History Folder`, `About ClipWarden`, and `Quit` items.
+  Icon swaps between normal, disabled, and a 5-second "alert"
+  variant after a detection.
+- Single-instance guard (`singleton.py`) backed by a named Win32
+  mutex. A second launch shows a native MessageBox pointing the
+  user at the running tray icon and exits 0.
+- About dialog: runs on a dedicated daemon thread so a blocking
+  `MessageBox` cannot deadlock the `pystray` event loop.
+- Multi-channel alert system (`alert.py`) routing every detection
+  through a dispatcher that fans out to:
+  - **Popup** - custom topmost Tkinter window on its own daemon
+    thread, shows chain + redacted addresses + a "Got it"
+    dismissal, bypasses Windows Do Not Disturb.
+  - **Sound** - independent `SoundChannel` ringing
+    `winsound.MessageBeep`; still fires when the popup is
+    disabled or when running headless.
+  - **Toast** - the existing `winotify` notifier, still subject
+    to DND, kept as a secondary channel for passive awareness.
+  - **Tray flash** - swaps the tray icon to an alert red variant
+    for 5 seconds, then reverts.
+  - **Log** - `log.jsonl` is always appended, regardless of which
+    other channels are enabled.
+  Each channel can be toggled independently under `config.alert`
+  (`popup`, `toast`, `sound`, `tray_flash`, all default `true`).
+- `__main__.py` rewritten for tray-by-default with `--headless`
+  opt-out, `--version`, and hidden `--install-autostart` /
+  `--uninstall-autostart` installer hooks. An outer crash handler
+  writes unhandled exceptions to `%APPDATA%\ClipWarden\crash.log`
+  so silent failures in a `--noconsole` build leave a trail.
+- `build/launcher.py`: PyInstaller entry-point shim that also
+  records import-time crashes to the same log, using a stdlib-only
+  mirror of `paths.appdata_dir` because the `clipwarden` package
+  may not import cleanly at that point.
+- `paths.py` is the single source of truth for user-writable
+  state: `config.json`, `whitelist.json`, `log.jsonl`, `crash.log`,
+  and the opt-in `diagnostic.log` all live under
+  `%APPDATA%\ClipWarden\` (Roaming).
+- Optional `CLIPWARDEN_DIAGNOSTIC=1` rotating file log under
+  `%APPDATA%\ClipWarden\diagnostic.log` (256 KiB x 3 backups).
+  Off by default; intended for user-reported-bug repro.
+- Icon generator (`tools/gen_icons.py`) producing reproducible
+  multi-resolution `icon.ico`, `icon-disabled.ico`, and
+  `icon-alert.ico` (256 / 48 / 32 / 16).
+- Process-wide per-monitor DPI awareness (v2) applied before any
+  window is created, so the tray icon and popup are crisp on
+  HiDPI displays.
+- Packaging: `build/ClipWarden.spec` (`--onefile --noconsole
+  --noupx`, icons bundled, version resource, hidden imports for
+  `pystray._win32`, `PIL._tkinter_finder`, `tkinter`, `winsound`,
+  `_cffi_backend`), `build/version_info.txt`, `build/installer.iss`
+  (Inno Setup 6, per-user install to
+  `%LOCALAPPDATA%\Programs\ClipWarden\`, optional autostart task
+  that shells out to `--install-autostart`, uninstaller calls
+  `--uninstall-autostart` and preserves `%APPDATA%\ClipWarden\`),
+  and `tools/gen_checksums.py` for SHA-256 release manifests.
+- `build/README.md` documents the full portable-exe + installer
+  + checksums workflow and the clean-install smoke test.
+- Tests: +102 tests covering the singleton, the tray state
+  machine and flash behaviour, each alert channel, the
+  dispatcher composition for tray and headless paths, the
+  crash-log path on Roaming `%APPDATA%\ClipWarden\`, the opt-in
+  diagnostic logger, `enabled_chains` gating at classifier and
+  detector layers, whitelist corruption backup, default-
+  persistence on missing config / whitelist, the `autostart`
+  legacy-key migration, watcher startup handshake and stop-
+  timeout guard, and detector reset on tray enable/disable.
+  328 tests total.
+
+### Changed
+- Version bumped to `1.0.0` across `src/clipwarden/__init__.py`,
+  `pyproject.toml`, and `build/version_info.txt`. PyPI
+  `Development Status` classifier moved from `3 - Alpha` to
+  `4 - Beta`.
+- Default run mode is now the tray; the Phase A headless
+  behaviour is still reachable via `--headless` and is the mode
+  used by CI and the smoke-pipeline harness.
+- `Config.enabled_chains` is now honoured at runtime: disabled
+  chains are short-circuited in the classifier dispatch instead
+  of only in the UI, so a disabled chain produces zero detector
+  state and zero alerts.
+- `Config.load()` / `Whitelist.load()` now persist defaults to
+  disk on missing-file fallback, so a fresh install leaves a
+  user-editable `config.json` and `whitelist.json` rather than
+  an empty data directory.
+- `Whitelist.load()` now backs corrupt files up to
+  `whitelist.json.bak-<timestamp>` before falling back to
+  empty, matching the config-corruption recovery pattern.
+- `Watcher.start()` now blocks until the pump thread confirms
+  `AddClipboardFormatListener` succeeded, raising
+  `WatcherStartError` on timeout or listener failure. A previous
+  `Watcher.stop()` that hit its join timeout now marks the
+  instance stopping and refuses subsequent `start()` calls, so
+  a wedged previous run cannot race fresh workers.
+- Tray enable/disable transitions reset detector state so a
+  paused-then-resumed session starts clean.
+
+### Removed
+- `Config.autostart` is no longer part of the schema; autostart
+  is a per-user Windows Run entry owned by the installer task
+  and `--install-autostart` / `--uninstall-autostart` flags.
+  Any legacy `"autostart"` field in an existing `config.json`
+  is stripped on load and the file is rewritten without it.
+
+### Added - Phase A (runtime foundation)
 - Project scaffolding: package layout, LICENSE, pinned + hashed
   dependencies, ruff + pytest configs, CI on windows-latest.
 - Address classifier with strongest-checksum-first dispatch (BTC ->
