@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from clipwarden.whitelist import Whitelist, WhitelistEntry
+from clipwarden.whitelist import Whitelist, WhitelistEntry, WhitelistError
 
 
 def test_add_and_contains_exact_match() -> None:
@@ -102,6 +102,46 @@ def test_load_entries_not_list_returns_empty(tmp_path: Path) -> None:
     p = tmp_path / "whitelist.json"
     p.write_text(json.dumps({"entries": "nope"}), encoding="utf-8")
     assert len(Whitelist.load(p)) == 0
+
+
+def test_load_corrupt_json_backs_up_file(tmp_path: Path) -> None:
+    """Unparseable JSON is renamed aside rather than silently overwritten.
+
+    Silently returning an empty whitelist and then having the next
+    save() clobber the bad file would destroy user-trusted pairs
+    without evidence. The backup file is the user's escape hatch.
+    """
+    p = tmp_path / "whitelist.json"
+    p.write_text("{not json", encoding="utf-8")
+    wl = Whitelist.load(p)
+    assert len(wl) == 0
+    assert not p.exists()
+    backups = sorted(tmp_path.glob("whitelist.json.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{not json"
+
+
+def test_load_non_object_root_backs_up_file(tmp_path: Path) -> None:
+    p = tmp_path / "whitelist.json"
+    p.write_text("[]", encoding="utf-8")
+    assert len(Whitelist.load(p)) == 0
+    assert not p.exists()
+    assert len(list(tmp_path.glob("whitelist.json.bak-*"))) == 1
+
+
+def test_load_entries_not_list_backs_up_file(tmp_path: Path) -> None:
+    p = tmp_path / "whitelist.json"
+    p.write_text(json.dumps({"entries": "nope"}), encoding="utf-8")
+    assert len(Whitelist.load(p)) == 0
+    assert not p.exists()
+    assert len(list(tmp_path.glob("whitelist.json.bak-*"))) == 1
+
+
+def test_whitelist_error_is_value_error() -> None:
+    # A caller catching ValueError still handles this; subclassing is
+    # documented API so external loaders can distinguish the
+    # corrupt-file case.
+    assert issubclass(WhitelistError, ValueError)
 
 
 def test_load_skips_malformed_entries(tmp_path: Path) -> None:
