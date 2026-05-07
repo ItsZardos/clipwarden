@@ -6,6 +6,14 @@ loosely. Dates are ISO.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-07
+
+### Fixed
+- CI dependency installs now invoke pip as `python -m pip`, avoiding
+  pip 26.1+ self-modification protection.
+- Dev requirements now include hash-pinned `colorama==0.4.6`, satisfying
+  `--require-hashes` for `build` on Windows.
+
 ### Changed - release artifact naming
 - Release artifacts renamed for clarity on the GitHub Releases page.
   Installer is now `ClipWarden-<version>.exe` (was

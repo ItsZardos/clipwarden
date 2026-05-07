@@ -27,13 +27,13 @@ jobs:
             requirements-dev.txt
 
       - name: Install runtime deps (hash-checked)
-        run: pip install --require-hashes -r requirements.txt
+        run: python -m pip install --require-hashes -r requirements.txt
 
       - name: Install dev deps (hash-checked)
-        run: pip install --require-hashes -r requirements-dev.txt
+        run: python -m pip install --require-hashes -r requirements-dev.txt
 
       - name: Install package
-        run: pip install -e . --no-deps
+        run: python -m pip install -e . --no-deps
 
       - name: Lint
         run: ruff check .
